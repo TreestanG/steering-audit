@@ -1,0 +1,94 @@
+{
+  "sanity": {
+    "same_prompt": [
+      "The word hot is",
+      "The word hot is"
+    ]
+  },
+  "minimal_pairs": {
+    "hot_cold": [
+      "The word hot is",
+      "The word cold is"
+    ],
+    "hot_warm": [
+      "The word hot is",
+      "The word warm is"
+    ],
+    "cold_freezing": [
+      "The word cold is",
+      "The word freezing is"
+    ],
+    "big_small": [
+      "The word big is",
+      "The word small is"
+    ],
+    "big_large": [
+      "The word big is",
+      "The word large is"
+    ],
+    "fast_slow": [
+      "The word fast is",
+      "The word slow is"
+    ],
+    "fast_quick": [
+      "The word fast is",
+      "The word quick is"
+    ],
+    "happy_sad": [
+      "The word happy is",
+      "The word sad is"
+    ],
+    "happy_joyful": [
+      "The word happy is",
+      "The word joyful is"
+    ],
+    "up_down": [
+      "The word up is",
+      "The word down is"
+    ],
+    "light_dark": [
+      "The word light is",
+      "The word dark is"
+    ],
+    "young_old": [
+      "The word young is",
+      "The word old is"
+    ],
+    "open_closed": [
+      "The word open is",
+      "The word closed is"
+    ]
+  },
+  "paraphrases": {
+    "capital_of_france": [
+      "Question: What city is France's capital?\nAnswer:",
+      "Question: Name the capital city of France.\nAnswer:"
+    ],
+    "two_plus_two": [
+      "Question: What is two plus two?\nAnswer:",
+      "Question: Calculate 2 + 2.\nAnswer:"
+    ],
+    "python_sort": [
+      "Question: Write Python code to sort a list.\nAnswer:",
+      "Question: Create a Python function that orders an array.\nAnswer:"
+    ],
+    "dragon_story": [
+      "Question: Write a short story about a dragon.\nAnswer:",
+      "Question: Tell a brief tale involving a dragon.\nAnswer:"
+    ]
+  },
+  "unrelated_controls": {
+    "opposite_vs_capital": [
+      "The opposite of hot is",
+      "The capital of France is"
+    ],
+    "capital_vs_math": [
+      "The capital of France is",
+      "The answer to two plus two is"
+    ],
+    "story_vs_code": [
+      "The hero entered a distant kingdom and",
+      "The Python function reads a file and"
+    ]
+  }
+}

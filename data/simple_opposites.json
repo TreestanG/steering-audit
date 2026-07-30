@@ -1,0 +1,102 @@
+{
+  "Same prompt": [
+    "The opposite of hot is",
+    "The opposite of hot is"
+  ],
+  "Hot vs. cold": [
+    "The opposite of hot is",
+    "The opposite of cold is"
+  ],
+  "Big vs. small": [
+    "The opposite of big is",
+    "The opposite of small is"
+  ],
+  "Fast vs. slow": [
+    "The opposite of fast is",
+    "The opposite of slow is"
+  ],
+  "Up vs. down": [
+    "The opposite of up is",
+    "The opposite of down is"
+  ],
+  "Happy vs. sad": [
+    "The opposite of happy is",
+    "The opposite of sad is"
+  ],
+  "Light vs. dark": [
+    "The opposite of light is",
+    "The opposite of dark is"
+  ],
+  "Young vs. old": [
+    "The opposite of young is",
+    "The opposite of old is"
+  ],
+  "Open vs. closed": [
+    "The opposite of open is",
+    "The opposite of closed is"
+  ],
+  "Early vs. late": [
+    "The opposite of early is",
+    "The opposite of late is"
+  ],
+  "Hot vs. warm": [
+    "The temperature is hot",
+    "The temperature is warm"
+  ],
+  "Cold vs. freezing": [
+    "The weather is cold",
+    "The weather is freezing"
+  ],
+  "Happy vs. joyful": [
+    "The person feels happy",
+    "The person feels joyful"
+  ],
+  "Sad vs. unhappy": [
+    "The person feels sad",
+    "The person feels unhappy"
+  ],
+  "Big vs. large": [
+    "The object is big",
+    "The object is large"
+  ],
+  "Fast vs. quick": [
+    "The car is fast",
+    "The car is quick"
+  ],
+  "Capital paraphrase": [
+    "The capital of France is",
+    "What city is the capital of France?"
+  ],
+  "Math paraphrase": [
+    "What is 2 + 2?",
+    "Calculate the sum of two and two."
+  ],
+  "Python function paraphrase": [
+    "Write a Python function to sort a list",
+    "Create Python code that sorts an array"
+  ],
+  "Story paraphrase": [
+    "Write a short story about a dragon",
+    "Tell a brief tale involving a dragon"
+  ],
+  "Hot vs. capital": [
+    "The opposite of hot is",
+    "The capital of France is"
+  ],
+  "Capital vs. math": [
+    "The capital of France is",
+    "What is 2 + 2?"
+  ],
+  "Math vs. coding": [
+    "What is 2 + 2?",
+    "Write a Python function to sort a list"
+  ],
+  "Story vs. code": [
+    "Once upon a time in a distant kingdom",
+    "Write a Python function to read a file"
+  ],
+  "Emotion vs. geography": [
+    "The person feels extremely happy",
+    "The largest ocean in the world is"
+  ]
+}
