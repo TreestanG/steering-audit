@@ -15,7 +15,7 @@ model = AutoModelForCausalLM.from_pretrained(model_name)
 n_layers = model.config.num_hidden_layers + 1
 model.eval()
 
-with open("data/prompt_comparisons.json", "r") as file:
+with open("data/sentiment_opposites_train.json", "r") as file:
     data = json.load(file)
 
 def get_final_token_activation(prompt):
