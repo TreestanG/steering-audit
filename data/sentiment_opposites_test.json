@@ -1,0 +1,104 @@
+{
+  "sentiment_opposites": {
+    "lecture_insightful_confusing": [
+      "The lecture was insightful and I felt",
+      "The lecture was confusing and I felt"
+    ],
+    "soup_flavorful_tasteless": [
+      "The soup was flavorful and I felt",
+      "The soup was tasteless and I felt"
+    ],
+    "wedding_magical_awkward": [
+      "The wedding was magical and I felt",
+      "The wedding was awkward and I felt"
+    ],
+    "exam_fair_unfair": [
+      "The exam was fair and I felt",
+      "The exam was unfair and I felt"
+    ],
+    "neighborhood_welcoming_hostile": [
+      "The neighborhood was welcoming and I felt",
+      "The neighborhood was hostile and I felt"
+    ],
+    "painting_stunning_ugly": [
+      "The painting was stunning and I felt",
+      "The painting was ugly and I felt"
+    ],
+    "commute_easy_miserable": [
+      "The commute was easy and I felt",
+      "The commute was miserable and I felt"
+    ],
+    "festival_joyful_chaotic": [
+      "The festival was joyful and I felt",
+      "The festival was chaotic and I felt"
+    ],
+    "teacher_encouraging_critical": [
+      "The teacher was encouraging and I felt",
+      "The teacher was critical and I felt"
+    ],
+    "dessert_heavenly_awful": [
+      "The dessert was heavenly and I felt",
+      "The dessert was awful and I felt"
+    ],
+    "debate_stimulating_pointless": [
+      "The debate was stimulating and I felt",
+      "The debate was pointless and I felt"
+    ],
+    "apartment_spacious_cramped": [
+      "The apartment was spacious and I felt",
+      "The apartment was cramped and I felt"
+    ],
+    "match_thrilling_dull": [
+      "The match was thrilling and I felt",
+      "The match was dull and I felt"
+    ],
+    "advice_wise_foolish": [
+      "The advice was wise and I felt",
+      "The advice was foolish and I felt"
+    ],
+    "trail_scenic_dreary": [
+      "The trail was scenic and I felt",
+      "The trail was dreary and I felt"
+    ],
+    "reunion_warm_tense": [
+      "The reunion was warm and I felt",
+      "The reunion was tense and I felt"
+    ],
+    "product_reliable_faulty": [
+      "The product was reliable and I felt",
+      "The product was faulty and I felt"
+    ],
+    "night_peaceful_restless": [
+      "The night was peaceful and I felt",
+      "The night was restless and I felt"
+    ],
+    "ceremony_moving_empty": [
+      "The ceremony was moving and I felt",
+      "The ceremony was empty and I felt"
+    ],
+    "sandwich_satisfying_disappointing": [
+      "The sandwich was satisfying and I felt",
+      "The sandwich was disappointing and I felt"
+    ],
+    "boss_kind_cruel": [
+      "The boss was kind and I felt",
+      "The boss was cruel and I felt"
+    ],
+    "view_breathtaking_bleak": [
+      "The view was breathtaking and I felt",
+      "The view was bleak and I felt"
+    ],
+    "workshop_useful_wasteful": [
+      "The workshop was useful and I felt",
+      "The workshop was wasteful and I felt"
+    ],
+    "season_wonderful_dreadful": [
+      "The season was wonderful and I felt",
+      "The season was dreadful and I felt"
+    ],
+    "reception_warm_cold": [
+      "The reception was warm and I felt",
+      "The reception was cold and I felt"
+    ]
+  }
+}
