@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sentiment_dir import (
     FRACTION,
     build_steering_vectors,
+    get_decoder_layers,
     load_pairs,
     make_add_vector_hook,
     model,
@@ -25,7 +26,7 @@ def layer_output(prompt, layer, hook_fn=None):
         out = output[0] if isinstance(output, tuple) else output
         captured["act"] = out[0, -1].detach().clone()
 
-    block = model.gpt_neox.layers[layer - 1]
+    block = get_decoder_layers(model)[layer - 1]
     handles = []
     if hook_fn is not None:
         handles.append(block.register_forward_hook(hook_fn))
