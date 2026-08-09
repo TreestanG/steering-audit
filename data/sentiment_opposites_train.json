@@ -1,5 +1,4 @@
 {
-  "sentiment_opposites": {
     "movie_wonderful_terrible": [
       "The movie was wonderful and I felt",
       "The movie was terrible and I felt"
@@ -200,5 +199,4 @@
       "The customer was friendly and I felt",
       "The customer was rude and I felt"
     ]
-  }
 }
