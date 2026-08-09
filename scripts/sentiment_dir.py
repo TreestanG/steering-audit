@@ -2,17 +2,23 @@ import json
 import numpy as np
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+import argparse
 
-MODEL_NAME = "EleutherAI/pythia-70m"
-FRACTION = 0.1
-WORD_POS = " happy"
-WORD_NEG = " sad"
 
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-if tokenizer.pad_token is None:
-    tokenizer.pad_token = tokenizer.eos_token
-model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, dtype=torch.float32)
-model.eval()
+model = None
+tokenizer = None
+
+
+def get_decoder_layers(model):
+    """Return the ModuleList of transformer blocks across common HF architectures."""
+    if hasattr(model, "gpt_neox"):
+        return model.gpt_neox.layers  # Pythia / GPT-NeoX
+    if hasattr(model, "model") and hasattr(model.model, "layers"):
+        return model.model.layers  # Llama, Qwen2, Mistral, Gemma, ...
+    if hasattr(model, "transformer") and hasattr(model.transformer, "h"):
+        return model.transformer.h  # GPT-2
+    raise AttributeError(f"Don't know how to find layers on {type(model).__name__}")
+
 
 def load_pairs(path):
     with open(path) as f:
@@ -56,7 +62,7 @@ def build_steering_vector(pairs, layer):
 
 def build_steering_vectors(pairs, layers=None):
     if layers is None:
-        layers = list(range(1, len(model.gpt_neox.layers) + 1))
+        layers = list(range(1, len(get_decoder_layers(model)) + 1))
 
     differences = {layer: [] for layer in layers}
     residuals = {layer: [] for layer in layers}
@@ -78,22 +84,31 @@ def build_steering_vectors(pairs, layers=None):
     return out
 
 
+def _steer_hidden(output, delta):
+    """Add delta into a layer output, preserving tuple vs tensor return shape."""
+    if isinstance(output, tuple):
+        hidden = output[0].clone()
+        hidden[:, -1, :] += delta.to(device=hidden.device, dtype=hidden.dtype)
+        return (hidden,) + output[1:]
+    hidden = output.clone()
+    hidden[:, -1, :] += delta.to(device=hidden.device, dtype=hidden.dtype)
+    return hidden
+
+
 def make_add_vector_hook(direction, scale, fraction):
     def add_vector(module, input, output):
-        v = direction.to(device=output.device, dtype=output.dtype)
-        output = output.clone()
-        output[:, -1, :] += fraction * scale * v / v.norm()
-        return output
+        v = direction
+        delta = fraction * scale * v / v.norm()
+        return _steer_hidden(output, delta)
 
     return add_vector
 
 def make_random_vector_hook(scale, fraction):
     np.random.seed(42)
-    v = torch.from_numpy(np.random.randn(model.config.hidden_size))
+    v = torch.from_numpy(np.random.randn(model.config.hidden_size)).float()
     def add_random_vector(module, input, output):
-        output = output.clone()
-        output[:, -1, :] += fraction * scale * v / v.norm()
-        return output
+        delta = fraction * scale * v / v.norm()
+        return _steer_hidden(output, delta)
     return add_random_vector
 
 
@@ -109,7 +124,7 @@ def token_id(word):
 
 
 def logits_diff(prompt, word_pos, word_neg, hook_fn, layer):
-    handle = model.gpt_neox.layers[layer - 1].register_forward_hook(hook_fn)
+    handle = get_decoder_layers(model)[layer - 1].register_forward_hook(hook_fn)
     try:
         steered = last_token_logits(prompt)
     finally:
@@ -123,27 +138,44 @@ def logits_diff(prompt, word_pos, word_neg, hook_fn, layer):
 
 
 def main():
-    train_pairs = load_pairs("data/sentiment_opposites_train.json")
-    test_pairs = load_pairs("data/sentiment_opposites_test.json")
+
+    global model, tokenizer
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
+    parser.add_argument("--train_path", type=str, default="data/sentiment_opposites_train.json")
+    parser.add_argument("--test_path", type=str, default="data/sentiment_opposites_test.json")
+    parser.add_argument("--fraction", type=float, default=0.1)
+    parser.add_argument("--word_pos", type=str, default=" happy")
+    parser.add_argument("--word_neg", type=str, default=" sad")
+    args = parser.parse_args()
+
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    model = AutoModelForCausalLM.from_pretrained(args.model_name, dtype=torch.float32)
+    model.eval()
+
+    train_pairs = load_pairs(args.train_path)
+    test_pairs = load_pairs(args.test_path)
 
     steering = build_steering_vectors(train_pairs)
     for i, (direction, mean_residual_norm) in steering.items():
-        hook_fn = make_add_vector_hook(direction, mean_residual_norm, FRACTION)
-        random_hook_fn = make_random_vector_hook(mean_residual_norm, FRACTION)
+        hook_fn = make_add_vector_hook(direction, mean_residual_norm, args.fraction)
+        random_hook_fn = make_random_vector_hook(mean_residual_norm, args.fraction)
 
         differences = []
         random_differences = []
         for prompt_pos, prompt_neg in test_pairs:
             steered_gap, base_gap = logits_diff(
-                prompt_neg, WORD_POS, WORD_NEG, hook_fn, i
+                prompt_neg, args.word_pos, args.word_neg, hook_fn, i
             )
 
-            steered_gap_rand, base_gap_rand = logits_diff(prompt_neg, WORD_POS, WORD_NEG, random_hook_fn, i)
+            steered_gap_rand, base_gap_rand = logits_diff(prompt_neg, args.word_pos, args.word_neg, random_hook_fn, i)
 
             differences.append(steered_gap - base_gap)
             random_differences.append(steered_gap_rand - base_gap_rand)
-        print(torch.stack(differences).mean())
-        print(torch.stack(random_differences).mean())
+        print("Steered gap mean: ", torch.stack(differences).mean())
+        print("Random gap mean: ", torch.stack(random_differences).mean())
         print("--------------------------------")
 
 
