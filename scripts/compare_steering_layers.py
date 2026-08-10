@@ -1,21 +1,18 @@
-import sys
 from pathlib import Path
+import sys
 
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from sentiment_dir import (
-    FRACTION,
-    build_steering_vectors,
-    get_decoder_layers,
-    load_pairs,
-    make_add_vector_hook,
-    model,
-    tokenizer,
-)
+
+import utils
+from sentiment_dir import build_steering_vectors, load_pairs, make_add_vector_hook
+from utils import get_decoder_layers, load_model
 
 TRAIN_PATH = "data/sentiment_opposites_train.json"
 TEST_PROMPT = "The movie was terrible and I felt"
+MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
+FRACTION = 0.1
 ATOL = 1e-5
 
 
@@ -26,16 +23,16 @@ def layer_output(prompt, layer, hook_fn=None):
         out = output[0] if isinstance(output, tuple) else output
         captured["act"] = out[0, -1].detach().clone()
 
-    block = get_decoder_layers(model)[layer - 1]
+    block = get_decoder_layers()[layer - 1]
     handles = []
     if hook_fn is not None:
         handles.append(block.register_forward_hook(hook_fn))
     handles.append(block.register_forward_hook(capture))
 
-    inputs = tokenizer(prompt, return_tensors="pt")
+    inputs = utils.tokenizer(prompt, return_tensors="pt")
     try:
         with torch.no_grad():
-            model(**inputs)
+            utils.model(**inputs)
     finally:
         for h in handles:
             h.remove()
@@ -48,6 +45,7 @@ def expected_add(direction, scale, fraction):
 
 
 def main():
+    load_model(MODEL_NAME)
     train_pairs = load_pairs(TRAIN_PATH)
     steering = build_steering_vectors(train_pairs)
     all_ok = True
@@ -72,7 +70,9 @@ def main():
         )
 
     if not all_ok:
-        raise SystemExit("Steering vector was not recovered as steered − base at the hooked layer.")
+        raise SystemExit(
+            "Steering vector was not recovered as steered − base at the hooked layer."
+        )
     print("\nAll layers: steered − base matches the added steering vector.")
 
 

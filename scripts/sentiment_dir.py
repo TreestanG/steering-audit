@@ -1,23 +1,11 @@
 import json
-import numpy as np
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
 import argparse
 
+import numpy as np
+import torch
 
-model = None
-tokenizer = None
-
-
-def get_decoder_layers(model):
-    """Return the ModuleList of transformer blocks across common HF architectures."""
-    if hasattr(model, "gpt_neox"):
-        return model.gpt_neox.layers  # Pythia / GPT-NeoX
-    if hasattr(model, "model") and hasattr(model.model, "layers"):
-        return model.model.layers  # Llama, Qwen2, Mistral, Gemma, ...
-    if hasattr(model, "transformer") and hasattr(model.transformer, "h"):
-        return model.transformer.h  # GPT-2
-    raise AttributeError(f"Don't know how to find layers on {type(model).__name__}")
+import utils
+from utils import get_decoder_layers, get_token_activations, load_model
 
 
 def load_pairs(path):
@@ -26,43 +14,13 @@ def load_pairs(path):
     return list(data.values())
 
 
-def get_token_activations(prompts, layer=None, last_only=True):
-    single = isinstance(prompts, str)
-    if single:
-        prompts = [prompts]
-
-    inputs = tokenizer(prompts, return_tensors="pt", padding=True)
-    with torch.no_grad():
-        outputs = model(**inputs, output_hidden_states=True)
-
-    lengths = inputs["attention_mask"].sum(dim=1)
-    last_idx = lengths - 1
-    batch_idx = torch.arange(len(prompts))
-
-    def trim(h):
-        return [h[i, :n] for i, n in enumerate(lengths.tolist())]
-
-    if last_only and layer is not None:
-        acts = outputs.hidden_states[layer][batch_idx, last_idx]
-    elif last_only and layer is None:
-        acts = [h[batch_idx, last_idx] for h in outputs.hidden_states]
-    elif layer is not None:
-        acts = trim(outputs.hidden_states[layer])
-    else:
-        acts = [trim(h) for h in outputs.hidden_states]
-    
-    if layer is not None:
-        return acts[0] if single else acts
-    
-    return [a[0] for a in acts] if single else acts
-
 def build_steering_vector(pairs, layer):
     return build_steering_vectors(pairs, layers=[layer])[layer]
 
 
 def build_steering_vectors(pairs, layers=None):
     if layers is None:
-        layers = list(range(1, len(get_decoder_layers(model)) + 1))
+        layers = list(range(1, len(get_decoder_layers()) + 1))
 
     differences = {layer: [] for layer in layers}
     residuals = {layer: [] for layer in layers}
@@ -97,34 +55,36 @@ def _steer_hidden(output, delta):
 
 def make_add_vector_hook(direction, scale, fraction):
     def add_vector(module, input, output):
-        v = direction
-        delta = fraction * scale * v / v.norm()
+        delta = fraction * scale * direction / direction.norm()
         return _steer_hidden(output, delta)
 
     return add_vector
 
+
 def make_random_vector_hook(scale, fraction):
     np.random.seed(42)
-    v = torch.from_numpy(np.random.randn(model.config.hidden_size)).float()
+    v = torch.from_numpy(np.random.randn(utils.model.config.hidden_size)).float()
+
     def add_random_vector(module, input, output):
         delta = fraction * scale * v / v.norm()
         return _steer_hidden(output, delta)
+
     return add_random_vector
 
 
 def last_token_logits(prompt):
-    inputs = tokenizer(prompt, return_tensors="pt")
+    inputs = utils.tokenizer(prompt, return_tensors="pt")
     with torch.no_grad():
-        outputs = model(**inputs)
+        outputs = utils.model(**inputs)
     return outputs.logits[0, -1]
 
 
 def token_id(word):
-    return tokenizer.encode(word)[-1]
+    return utils.tokenizer.encode(word)[-1]
 
 
 def logits_diff(prompt, word_pos, word_neg, hook_fn, layer):
-    handle = get_decoder_layers(model)[layer - 1].register_forward_hook(hook_fn)
+    handle = get_decoder_layers()[layer - 1].register_forward_hook(hook_fn)
     try:
         steered = last_token_logits(prompt)
     finally:
@@ -138,8 +98,6 @@ def logits_diff(prompt, word_pos, word_neg, hook_fn, layer):
 
 
 def main():
-
-    global model, tokenizer
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
     parser.add_argument("--train_path", type=str, default="data/sentiment_opposites_train.json")
@@ -149,11 +107,7 @@ def main():
     parser.add_argument("--word_neg", type=str, default=" sad")
     args = parser.parse_args()
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    model = AutoModelForCausalLM.from_pretrained(args.model_name, dtype=torch.float32)
-    model.eval()
+    load_model(args.model_name)
 
     train_pairs = load_pairs(args.train_path)
     test_pairs = load_pairs(args.test_path)
@@ -169,11 +123,12 @@ def main():
             steered_gap, base_gap = logits_diff(
                 prompt_neg, args.word_pos, args.word_neg, hook_fn, i
             )
-
-            steered_gap_rand, base_gap_rand = logits_diff(prompt_neg, args.word_pos, args.word_neg, random_hook_fn, i)
-
+            steered_gap_rand, base_gap_rand = logits_diff(
+                prompt_neg, args.word_pos, args.word_neg, random_hook_fn, i
+            )
             differences.append(steered_gap - base_gap)
             random_differences.append(steered_gap_rand - base_gap_rand)
+
         print("Steered gap mean: ", torch.stack(differences).mean())
         print("Random gap mean: ", torch.stack(random_differences).mean())
         print("--------------------------------")
