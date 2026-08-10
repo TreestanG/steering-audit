@@ -1,0 +1,1764 @@
+{
+  "version": 1,
+  "seed": 0,
+  "source": {
+    "handauthored": "data/trajectory_bank_handauthored.json",
+    "natural": {
+      "repo": "roneneldan/TinyStories",
+      "n": 200,
+      "max_chars": 400
+    }
+  },
+  "prompts": [
+    {
+      "id": "base64_0001",
+      "category": "base64",
+      "text": "SGVsbG8sIHdvcmxkIQ=="
+    },
+    {
+      "id": "base64_0002",
+      "category": "base64",
+      "text": "VGhlIHF1aWNrIGJyb3duIGZveA=="
+    },
+    {
+      "id": "base64_0003",
+      "category": "base64",
+      "text": "cGF5bG9hZDogYWJjMTIz"
+    },
+    {
+      "id": "base64_0004",
+      "category": "base64",
+      "text": "payload: dGVzdC1wcm9tcHQ="
+    },
+    {
+      "id": "base64_0005",
+      "category": "base64",
+      "text": "data:text/plain;base64,aGVsbG8="
+    },
+    {
+      "id": "base64_0006",
+      "category": "base64",
+      "text": "QkVHSU46IHRyYWplY3Rvcnk="
+    },
+    {
+      "id": "base64_0007",
+      "category": "base64",
+      "text": "YWNjdW11bGF0aW9uIHN0ZWVyaW5n"
+    },
+    {
+      "id": "base64_0008",
+      "category": "base64",
+      "text": "TWlzaHJhIGV0IGFsLg=="
+    },
+    {
+      "id": "base64_0009",
+      "category": "base64",
+      "text": "UHl0aGlhLTdwbQ=="
+    },
+    {
+      "id": "base64_0010",
+      "category": "base64",
+      "text": "Zm9yd2FyZCBwYXNzIG9ubHk="
+    },
+    {
+      "id": "base64_0011",
+      "category": "base64",
+      "text": "encoded=UmVzaWR1YWwgc3RyZWFt"
+    },
+    {
+      "id": "base64_0012",
+      "category": "base64",
+      "text": "token: YWN0aXZhdGlvbg=="
+    },
+    {
+      "id": "base64_0013",
+      "category": "base64",
+      "text": "bGF5ZXIgZm91cg=="
+    },
+    {
+      "id": "base64_0014",
+      "category": "base64",
+      "text": "bmVhcmVzdCBuZWlnaGJvdXI="
+    },
+    {
+      "id": "base64_0015",
+      "category": "base64",
+      "text": "dm9jYWJ1bGFyeSB0YWJsZQ=="
+    },
+    {
+      "id": "base64_0016",
+      "category": "base64",
+      "text": "c2VlZCAwIHJlcHJvZHVjaWJsZQ=="
+    },
+    {
+      "id": "base64_0017",
+      "category": "base64",
+      "text": "Y2xlYW4gcHJvbXB0IGJhbms="
+    },
+    {
+      "id": "base64_0018",
+      "category": "base64",
+      "text": "T09EIGJ1dCBub3Qgc3RlZXJlZA=="
+    },
+    {
+      "id": "base64_0019",
+      "category": "base64",
+      "text": "base64: ZmFsc2UgcG9zaXRpdmU="
+    },
+    {
+      "id": "base64_0020",
+      "category": "base64",
+      "text": "U0lQSVQgaW52ZXJzaW9u"
+    },
+    {
+      "id": "code_0001",
+      "category": "code",
+      "text": "def fib(n):\n    a, b = 0, 1\n    for _ in range(n):\n        a, b = b, a + b\n    return a"
+    },
+    {
+      "id": "code_0002",
+      "category": "code",
+      "text": "def binary_search(arr, target):\n    lo, hi = 0, len(arr) - 1\n    while lo <= hi:\n        mid = (lo + hi) // 2\n        if arr[mid] == target:\n            return mid\n        if arr[mid] < target:\n            lo = mid + 1\n        else:\n            hi = mid - 1\n    return -1"
+    },
+    {
+      "id": "code_0003",
+      "category": "code",
+      "text": "class Counter:\n    def __init__(self):\n        self.n = 0\n    def inc(self):\n        self.n += 1\n        return self.n"
+    },
+    {
+      "id": "code_0004",
+      "category": "code",
+      "text": "from collections import defaultdict\n\ngraph = defaultdict(list)\ngraph['a'].append('b')\ngraph['b'].append('c')\nprint(dict(graph))"
+    },
+    {
+      "id": "code_0005",
+      "category": "code",
+      "text": "import json\n\npayload = {'user': 'alice', 'score': 42}\nprint(json.dumps(payload, indent=2))"
+    },
+    {
+      "id": "code_0006",
+      "category": "code",
+      "text": "async def fetch(url):\n    async with aiohttp.ClientSession() as session:\n        async with session.get(url) as resp:\n            return await resp.text()"
+    },
+    {
+      "id": "code_0007",
+      "category": "code",
+      "text": "SELECT users.id, users.email, COUNT(orders.id) AS order_count\nFROM users\nLEFT JOIN orders ON orders.user_id = users.id\nGROUP BY users.id, users.email\nHAVING COUNT(orders.id) > 3;"
+    },
+    {
+      "id": "code_0008",
+      "category": "code",
+      "text": "UPDATE products SET price = price * 0.9 WHERE category = 'clearance' AND stock > 0;"
+    },
+    {
+      "id": "code_0009",
+      "category": "code",
+      "text": "WITH ranked AS (\n  SELECT *, ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) AS rn\n  FROM employees\n)\nSELECT * FROM ranked WHERE rn <= 3;"
+    },
+    {
+      "id": "code_0010",
+      "category": "code",
+      "text": "const sum = (xs) => xs.reduce((a, b) => a + b, 0);\nconsole.log(sum([1, 2, 3, 4]));"
+    },
+    {
+      "id": "code_0011",
+      "category": "code",
+      "text": "function debounce(fn, ms) {\n  let t;\n  return (...args) => {\n    clearTimeout(t);\n    t = setTimeout(() => fn(...args), ms);\n  };\n}"
+    },
+    {
+      "id": "code_0012",
+      "category": "code",
+      "text": "const res = await fetch('/api/items');\nconst data = await res.json();\nconsole.log(data.length);"
+    },
+    {
+      "id": "code_0013",
+      "category": "code",
+      "text": "#!/usr/bin/env bash\nset -euo pipefail\nfor f in *.txt; do\n  wc -l \"$f\"\ndone"
+    },
+    {
+      "id": "code_0014",
+      "category": "code",
+      "text": "find . -name '*.py' -print0 | xargs -0 grep -n 'TODO'"
+    },
+    {
+      "id": "code_0015",
+      "category": "code",
+      "text": "curl -sS -X POST https://example.com/api \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"ok\": true}'"
+    },
+    {
+      "id": "code_0016",
+      "category": "code",
+      "text": "rsync -avz --delete ./dist/ user@host:/var/www/app/"
+    },
+    {
+      "id": "code_0017",
+      "category": "code",
+      "text": "fn main() {\n    let mut v = vec![1, 2, 3];\n    v.push(4);\n    println!(\"{:?}\", v);\n}"
+    },
+    {
+      "id": "code_0018",
+      "category": "code",
+      "text": "pub fn clamp(x: f64, lo: f64, hi: f64) -> f64 {\n    x.max(lo).min(hi)\n}"
+    },
+    {
+      "id": "code_0019",
+      "category": "code",
+      "text": "package main\n\nimport \"fmt\"\n\nfunc main() {\n    fmt.Println(\"hello\")\n}"
+    },
+    {
+      "id": "code_0020",
+      "category": "code",
+      "text": "type Node struct {\n    Val  int\n    Next *Node\n}"
+    },
+    {
+      "id": "code_0021",
+      "category": "code",
+      "text": "template <typename T>\nT max3(T a, T b, T c) {\n    return std::max(a, std::max(b, c));\n}"
+    },
+    {
+      "id": "code_0022",
+      "category": "code",
+      "text": "#include <vector>\n#include <algorithm>\n\nint main() {\n    std::vector<int> v{3, 1, 2};\n    std::sort(v.begin(), v.end());\n}"
+    },
+    {
+      "id": "code_0023",
+      "category": "code",
+      "text": "public class Hello {\n    public static void main(String[] args) {\n        System.out.println(\"hi\");\n    }\n}"
+    },
+    {
+      "id": "code_0024",
+      "category": "code",
+      "text": "Map<String, Integer> counts = new HashMap<>();\ncounts.merge(\"a\", 1, Integer::sum);"
+    },
+    {
+      "id": "code_0025",
+      "category": "code",
+      "text": "defmodule Math do\n  def square(x), do: x * x\nend"
+    },
+    {
+      "id": "code_0026",
+      "category": "code",
+      "text": "let rec factorial n =\n  if n <= 1 then 1 else n * factorial (n - 1)"
+    },
+    {
+      "id": "code_0027",
+      "category": "code",
+      "text": "CREATE INDEX idx_orders_created ON orders (created_at DESC);"
+    },
+    {
+      "id": "code_0028",
+      "category": "code",
+      "text": "ALTER TABLE users ADD COLUMN last_login TIMESTAMP NULL;"
+    },
+    {
+      "id": "code_0029",
+      "category": "code",
+      "text": "try:\n    with open('data.csv') as f:\n        rows = list(csv.DictReader(f))\nexcept FileNotFoundError:\n    rows = []"
+    },
+    {
+      "id": "code_0030",
+      "category": "code",
+      "text": "@pytest.fixture\ndef client():\n    app = create_app()\n    return app.test_client()"
+    },
+    {
+      "id": "code_0031",
+      "category": "code",
+      "text": "def merge(a, b):\n    out = []\n    i = j = 0\n    while i < len(a) and j < len(b):\n        if a[i] <= b[j]:\n            out.append(a[i]); i += 1\n        else:\n            out.append(b[j]); j += 1\n    return out + a[i:] + b[j:]"
+    },
+    {
+      "id": "code_0032",
+      "category": "code",
+      "text": "interface User {\n  id: string;\n  email: string;\n  active?: boolean;\n}"
+    },
+    {
+      "id": "code_0033",
+      "category": "code",
+      "text": "type Result<T> = { ok: true; value: T } | { ok: false; error: string };"
+    },
+    {
+      "id": "code_0034",
+      "category": "code",
+      "text": "git checkout -b feature/trajectory-bank\ngit status --short"
+    },
+    {
+      "id": "code_0035",
+      "category": "code",
+      "text": "docker compose up -d --build\ndocker compose logs -f api"
+    },
+    {
+      "id": "code_0036",
+      "category": "code",
+      "text": "awk -F, 'NR>1 {sum += $3} END {print sum}' metrics.csv"
+    },
+    {
+      "id": "code_0037",
+      "category": "code",
+      "text": "sed -i '' 's/foo/bar/g' README.md"
+    },
+    {
+      "id": "code_0038",
+      "category": "code",
+      "text": "psql \"$DATABASE_URL\" -c 'SELECT NOW();'"
+    },
+    {
+      "id": "code_0039",
+      "category": "code",
+      "text": "npm run build && npm test -- --runInBand"
+    },
+    {
+      "id": "code_0040",
+      "category": "code",
+      "text": "cargo test --release -- --nocapture"
+    },
+    {
+      "id": "natural_en_0001",
+      "category": "natural_en",
+      "text": "Once there were two brothers, Toby and Jack. Toby was only 3 and Jack was 8. One day they were playing near the lake. Toby got tired and lay down to rest. Suddenly, Jack saw a funny bird flying by. He quickly grabbed his gun and shot at the bird. The bird flew away, but the sound of the gunshot scared Toby. He started crying, and Jack could not stop him. Suddenly, everyone heard a loud noise - an"
+    },
+    {
+      "id": "natural_en_0002",
+      "category": "natural_en",
+      "text": "Sara liked to read books. She had many books in her room. Some books had pictures, some books had stories, some books had words. Sara wanted to learn new words. She asked her mom for a big book with many words. Her mom gave her a dictionary. She said, \"This is a dictionary. It has many words and what they mean. You can read it and learn new words. But it is a big book, so be careful with it.\""
+    },
+    {
+      "id": "natural_en_0003",
+      "category": "natural_en",
+      "text": "Tim and Sam were brothers who liked to play with their toys. They had a big jeep that they could drive around the yard. One day, they decided to go on an adventure with their jeep. They packed some snacks, water, and a map. \"Where are we going?\" Tim asked Sam, who was holding the map. \"We are going to the big hill, where we can see the whole town,\" Sam said. \"It will be fun!\" They drove their"
+    },
+    {
+      "id": "natural_en_0004",
+      "category": "natural_en",
+      "text": "Once there was a woman who wanted to explain something very difficult. So she invited her three-year-old nephew to listen to her. The woman said, “I’m going to explain something very difficult. Are you ready?” The three-year-old nodded his head. The woman began, “Well, this is something that’s very hard to understand.” But the three-year-old was still confused. He said, “I don’t understand. Can"
+    },
+    {
+      "id": "natural_en_0005",
+      "category": "natural_en",
+      "text": "Kate woke up early one morning. She was very excited, because today was a special day. She hopped out of bed, dressed in her warm clothes, and ran out the door. She was on her way to the park. It was mild outside, so she knew she would have a good time. When she got there, Kate saw a lot of people. There were people playing games, staff members walking around and kids playing on the slides. She"
+    },
+    {
+      "id": "natural_en_0006",
+      "category": "natural_en",
+      "text": "Cindy was an ordinary girl. She enjoyed playing with her toys and singing songs. One day, she decided that she wanted to explore. She opened the door to her room, but it was too dark to see. Then she remembered. Mom had told her she would be allowed to open her wardrobe. She opened the wardrobe door, and it creaked. Behind it was a doorway! Cindy was delighted. She was so excited, she wanted to"
+    },
+    {
+      "id": "natural_en_0007",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a tough pumpkin. It was a huge pumpkin, the biggest one the farmer had ever seen. One day, the farmer wanted to separate the pumpkin into two pieces. He tried very hard to do it, but the pumpkin was too tough. He asked the 3-year-old child to help him. The child said, \"I can't do it - it's too tough!\" But the farmer said, \"I know you can do it. Just try it.\" The child"
+    },
+    {
+      "id": "natural_en_0008",
+      "category": "natural_en",
+      "text": "Sam likes to draw with crayons. He has many crayons of different colors. He likes to draw animals and trees and flowers. He draws on paper and on the wall and on the floor. One day, Sam wants to draw a wild lion. He takes a yellow crayon and a brown crayon. He draws a big head and a big body and a big tail. He draws eyes and ears and a nose and a mouth. He draws teeth and claws and a mane. He is"
+    },
+    {
+      "id": "natural_en_0009",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a little temple in the middle of a forest. It was called the Magic Temple and it was said that anyone who visited it would be blessed. One day, a small boy named Sam decided to explore the Magic Temple. He was filled with wonder as he slowly walked through the mysterious building. He couldn't help but smile at all of the beautiful decorations and artifacts that filled"
+    },
+    {
+      "id": "natural_en_0010",
+      "category": "natural_en",
+      "text": "Tom and Lily were twins who liked to play outside. One day, they went to the woods with their dog Spot. They saw many trees, flowers and animals. They wanted to find a stream to splash in. They walked and walked until they heard water. They ran to the sound and saw a stream. It was clear and cold and had many rocks. Tom and Lily took off their shoes and socks and put their feet in the water. Spot"
+    },
+    {
+      "id": "natural_en_0011",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a nosy little girl. She loved to explore. One day, she decided to take a step and start down a path that she had never gone before. As she stepped along, she heard a sound. It was the sound of singing coming from deep in the woods. She was nosy and wanted to know who was singing. So she started to walk faster, following the sound of the singing, until she came to a"
+    },
+    {
+      "id": "natural_en_0012",
+      "category": "natural_en",
+      "text": "Lily and Tom were best friends. They liked to play in the park every day. One day, they saw a big bird on the ground. It did not move or make noise. Lily and Tom went closer to look at it. \"Is it dead?\" Lily asked Tom in a whisper. She was scared of the bird. \"I don't know. Maybe it is sleeping,\" Tom said. He wanted to touch the bird, but Lily stopped him. \"No, don't touch it! It might be sick or"
+    },
+    {
+      "id": "natural_en_0013",
+      "category": "natural_en",
+      "text": "Once upon a time there was a car. It was empty inside and it looked very big. The car was so shiny on the outside. Every day the car would sit in front of a house. One day the car said, \"Please take me for a ride, I want to see the world!\" The house owner heard the car and he said, \"Okay, let's go\". He got inside the car and he drove it away. The car was so excited! They went on a long drive, and"
+    },
+    {
+      "id": "natural_en_0014",
+      "category": "natural_en",
+      "text": "Lila and Ben are playing with their toys in the living room. Lila has a plastic doll with long hair and a pink dress. Ben has a plastic truck that is orange and makes loud noises. They are having fun, but then Ben wants to play with Lila's doll. \"Give me your doll, Lila. I want to see her hair,\" Ben says. \"No, Ben. This is my doll. You have your truck. Go away,\" Lila says. Ben does not listen. He"
+    },
+    {
+      "id": "natural_en_0015",
+      "category": "natural_en",
+      "text": "Anna likes to learn new things. She likes to draw, to sing, to count and to read. She has many books and crayons in her drawer. She likes to take them out and play with them. One day, Anna wants to learn how to write her name. She takes out a paper and a crayon from her drawer. She asks her mom to help her. \"Mom, can you show me how to write Anna?\" she says. \"Sure, sweetie. I can help you."
+    },
+    {
+      "id": "natural_en_0016",
+      "category": "natural_en",
+      "text": "John was an ordinary 3 year old who loved playing and being silly. One day he saw something he had never seen before; a big cup of coffee that his mom was drinking. He wanted to try it, but he knew he wasn’t allowed to. John asked his mom: “Mommy, can I have a coffee?” His mom said: “No, John! It’s not for children, it’s too hot and it’s very strong. You could get sick if you drink it.” John was"
+    },
+    {
+      "id": "natural_en_0017",
+      "category": "natural_en",
+      "text": "One day, Mom and Dad were getting ready to celebrate together. Dad said, \"Let's get organized, it is time to start!\" Mom asked, \"Should we make something special for the day?\" Dad said, \"Yes, let's make something delicious and have a party!\" Mom and Dad made some food that was quick to prepare. Then, they got dressed in their party clothes and decorated the house. They hung balloons, streamers,"
+    },
+    {
+      "id": "natural_en_0018",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a very wealthy oak tree. The oak tree had everything it could want and everything it needed. But deep down the oak tree was very sad and lonely. It wanted to have friends to share its wealth with. One day, the oak tree noticed a little rabbit suffering in the cold. The rabbit had no home to keep it warm, and the oak tree felt bad for the little rabbit. The oak tree"
+    },
+    {
+      "id": "natural_en_0019",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a girl named Nora. She was really brave, so one day she decided to explore the woods. As she walked through the trees, she suddenly heard a scary sound. It was the cackle of a witch! Nora was a bit scared, but she kept walking. The witch was sitting on a chair in a dark cave. She saw Nora and said in a terrible voice, “Why hello there, little girl. Come closer and"
+    },
+    {
+      "id": "natural_en_0020",
+      "category": "natural_en",
+      "text": "Once upon a time there was a clumsy little car called Zoom. He was always running into things and bumping into them. One day he was playing in the park when he saw a ball. He wanted to play with it, so he zoomed over and tried to squeeze it. But the ball was too hard and Zoom couldn't squeeze it. He started to feel sad, but then he had an idea. He zoomed all around the park, collecting leaves,"
+    },
+    {
+      "id": "natural_en_0021",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a nation of purple people. Everyone in the nation was very happy and they all hugged each other all the time. One day, something changed. One of the purple people, who was called Joe, became very angry with the others and refused to hug them. The other purple people asked him why he didn't want to hug them. Joe said that he was angry because the others had been mean to"
+    },
+    {
+      "id": "natural_en_0022",
+      "category": "natural_en",
+      "text": "Once there was a very young rabbit, who loved hopping and eating yummy carrots. One day, the young rabbit felt very brave and hopped outside of his home. He saw a big fierce animal walking in the forest. Instinctively, he ran and hid behind a big tree. The big animal saw the rabbit and yelled, \"Come here little one! I can give you lots of delicious things.\" The rabbit was scared but he was also"
+    },
+    {
+      "id": "natural_en_0023",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a naughty little boy named Tony. He was always getting into trouble. One morning he made a huge mess in the living room while mommy was out. When mommy came home, she saw the mess and was very mad. She said, \"I'm going to punish you for making this mess!\" Tony was very scared. So, mommy sent Tony upstairs and told him to put on his bathrobe. Tony put on his soft, warm"
+    },
+    {
+      "id": "natural_en_0024",
+      "category": "natural_en",
+      "text": "Tommy was so excited when he saw the lovely steel car. It had shiny embellishments and rims that made it look modern and sleek. “I want to grab it!” he shouted to his Mom. Tommy’s Mom squatted down and looked into his eyes. “No, Tommy,” she said. “It’s not for us, it belongs to the store.” But Tommy didn’t want to listen. He ran forward and tried to grab the car. Suddenly, an alarm started"
+    },
+    {
+      "id": "natural_en_0025",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a clever little pig. His name was Piggy and he was very brave. One day he wanted to have an adventure, so he started to search for one. He looked everywhere, but he couldn't find anything. Then he noticed a strange case. It was very mysterious and piggy had never seen it before. He wanted to open it and see what was inside. So, he used his clever mind and started to"
+    },
+    {
+      "id": "natural_en_0026",
+      "category": "natural_en",
+      "text": "The lazy little girl was walking down the street in her favorite hat. She saw a man who was sitting in the sunshine. The man was nodding his head up and down. The little girl smiled and waved at him. He nodded back to her. The girl liked the man's happy nod and she wanted to do the same. She gave him a big nod before skipping away. She kept nodding her head as she went. The little girl's hat blew"
+    },
+    {
+      "id": "natural_en_0027",
+      "category": "natural_en",
+      "text": "Lily and Ben were playing with paper and scissors. They liked to cut shapes and make animals and flowers. Lily cut a big circle and said, \"Look, Ben, I made a sun!\" Ben looked at her paper and said, \"That's not a sun, Lily. That's a ball. A sun has rays and is yellow. Your paper is white.\" Lily felt sad and said, \"No, Ben, it's a sun. I can make it yellow with crayons. And I can draw rays too."
+    },
+    {
+      "id": "natural_en_0028",
+      "category": "natural_en",
+      "text": "Lily and Sam were playing in the park with their mom. They saw a big tent with many colors. They wanted to see what was inside. \"Can we go, mom?\" Lily asked. \"Sure, but be careful and stay together,\" mom said. Lily and Sam ran to the tent. They opened the flap and went in. It was wide and dark inside. They saw many things: a lamp, a rug, a basket, a book. \"Wow, look at this!\" Sam said. He picked"
+    },
+    {
+      "id": "natural_en_0029",
+      "category": "natural_en",
+      "text": "Ted and Mary were good friends. They always played together in the beautiful meadow behind their homes. Today, Ted had something special to show Mary. They walked to the nearby barn, which was Ted's favorite place. When they arrived, Mary was so excited. Ted smiled at her and said, \"guess what I can add to the barn!\" Mary's curiosity was peaked and she said, \"what is it Ted?\" Ted beamed with"
+    },
+    {
+      "id": "natural_en_0030",
+      "category": "natural_en",
+      "text": "Tim and Mia like to play in the pool. They have a big ball and a small duck. They throw the ball and catch it. They make the duck swim and quack. \"Let's dive!\" Tim says. He puts his head under the water and kicks his legs. He sees a fish and a star. He smiles and comes up. \"Wow, you dive so well!\" Mia says. She wants to try too. She holds her nose and jumps in. She sees a shell and a flower. She"
+    },
+    {
+      "id": "natural_en_0031",
+      "category": "natural_en",
+      "text": "Once there was a little girl called Molly who was three years old. She was going to an incredible park with her mum. When they arrived, Molly saw lots of lovely things — a big slide, a pond filled with colorful fish, and a bright red seesaw. She was so happy! Her mum told Molly to play on the slide but stay where she could see her. Molly said ok and ran to the slide. She climbed up and sat at the"
+    },
+    {
+      "id": "natural_en_0032",
+      "category": "natural_en",
+      "text": "Once upon the time there was a young girl who had the most beautiful voice. Everywhere she went, people stopped to listen to her sweet singing. One day, she went to a hotel. As she went in, the girl saw a doorbell. She exclaimed, \"That looks so fun!\" and run to press it. When she pressed it, the bell started to ring. An old man came out of the hotel. He said, \"Hello young girl. What brings you"
+    },
+    {
+      "id": "natural_en_0033",
+      "category": "natural_en",
+      "text": "The sun was shining brightly and it was a beautiful day. Amy was walking down the street when she saw something glinting in the road. She stopped and saw that it was a wallet. It seemed like it had been dropped by someone. She picked it up and discovered it was broken. Amy could see the wallet's photo holder was full of pictures of a family. She wondered whose wallet it was and why it had been"
+    },
+    {
+      "id": "natural_en_0034",
+      "category": "natural_en",
+      "text": "Once upon a time there lived two neighbors. They were named Lilly and Stan. Lilly was a pretty girl and Stan was a strong boy. Every day, the two would play in the garden together and have lots of fun. One day, Lilly and Stan had a big fight. It was so big that they couldn't agree with each other no matter how hard they tried. \"Stop that!\", Stan said. Lilly didn't like what Stan said, so she"
+    },
+    {
+      "id": "natural_en_0035",
+      "category": "natural_en",
+      "text": "Molly was walking through the garden when she saw a beautiful sight. Everything was blooming! Everywhere she looked, she saw flowers of every colour. She told her mom: \"Wow! Look at all the pretty things blooming!\" Her mom smiled at her and took her hand. \"Yes, isn't it amazing? Now, look at these flowers over here. Do you see what makes them so special?\" Molly looked closer and saw the tallest"
+    },
+    {
+      "id": "natural_en_0036",
+      "category": "natural_en",
+      "text": "Lily and Ben are friends. They like to play outside. But today it is raining. The rain is wet and cold. They cannot play outside. \"Let's play inside,\" Lily says. \"We can make a fort with pillows and blankets.\" \"OK,\" Ben says. \"That sounds great. Where can we make the fort?\" Lily thinks. She sees a door. The door is big and brown. It leads to the basement. Lily has never been to the basement. She"
+    },
+    {
+      "id": "natural_en_0037",
+      "category": "natural_en",
+      "text": "Tim and Sue were hungry. They wanted to eat turkey for lunch. Mom said she would make turkey for them. She put the turkey in the oven and went to the store. Tim and Sue waited for mom. They smelled the turkey. It smelled good. They wanted to taste it. They went to the kitchen. They saw the oven. They saw a big pot on the stove. They saw a red bottle on the counter. \"What is in the pot?\" Tim"
+    },
+    {
+      "id": "natural_en_0038",
+      "category": "natural_en",
+      "text": "Bella and Mommy walked along the street, looking for something special. Then Bella saw some lovely fur in a shop window. \"Mommy, look!\" she said. Mommy smiled. \"That's very interesting, Bella. Shall we buy it and celebrate?\" Bella was so excited. She couldn't wait to take the fur home. When they got home, Mommy helped Bella make a pretty hat with the fur. They both wore their hats, then danced"
+    },
+    {
+      "id": "natural_en_0039",
+      "category": "natural_en",
+      "text": "Lila and Ben are playing cops and robbers in the backyard. Lila is the cop and Ben is the robber. Lila has a toy gun and Ben has a hat and a bag. \"Stop, robber! You are bad!\" Lila shouts, running after Ben. \"No, you stop, cop! You can't catch me!\" Ben says, laughing and running away. Lila aims her toy gun and pretends to shoot Ben. \"Bang, bang, bang! I got you, robber!\" Ben falls down and"
+    },
+    {
+      "id": "natural_en_0040",
+      "category": "natural_en",
+      "text": "Once there was a naughty little boy. He stepped out of his house and saw a toy in the garden. He liked it and so he stepped closer to it. But it was naughty of him to do this. Suddenly, he heard a loud noise. It was the toy! Wonders of all wonders, the toy had come to life. It rolled away and the naughty boy tried to chase after it, but it was too quick. He could not step fast enough to keep up!"
+    },
+    {
+      "id": "natural_en_0041",
+      "category": "natural_en",
+      "text": "The gorilla was so glad to have helped the little monkey, he in turn became happy. He said goodbye to the monkey family, carried his box back to the entrance of the forest, and walked away feeling much less troubled. <|endoftext|>"
+    },
+    {
+      "id": "natural_en_0042",
+      "category": "natural_en",
+      "text": "Anna and Ben are twins. They like to play with their toys and watch cartoons. But they do not like to eat the same food. Anna likes pizza, but Ben does not. Ben likes soup, but Anna does not. One day, their mom makes pizza for lunch. Anna is happy, but Ben is sad. He does not want to eat pizza. He thinks pizza is yucky. He says to his mom, \"Mom, I do not want pizza. Can I have soup?\" Mom says,"
+    },
+    {
+      "id": "natural_en_0043",
+      "category": "natural_en",
+      "text": "Once upon a time there was a little girl. She had thick, brown hair and bright blue eyes. Every night she would stand outside her window and look up at the sky. It was so full of stars and made her feel so happy. She loved to watch as the stars glowed in the night sky. One night, the girl was looking up at the stars when she noticed a log floating in the air. It was glowing with a bright, rich"
+    },
+    {
+      "id": "natural_en_0044",
+      "category": "natural_en",
+      "text": "Once upon a time there was a little girl called Ann. She was a very curious 3-year old and loved to explore. One day while exploring her house her eyes rested on the original bookshelf. She began to question what was behind it. Ann's mom looked at her daughter and smiled. \"Let's explore what's behind!\" she said. Ann was so excited she raced to the bookshelf and opened the door. To her surprise,"
+    },
+    {
+      "id": "natural_en_0045",
+      "category": "natural_en",
+      "text": "A little girl named Sandy was out walking one day with her mom. She stopped and looked up at a kangaroo. “Look mommy, look at the kangaroo!” Sandy said, her eyes wide with wonder. Her mom smiled. “Yes sweetie, that’s a kangaroo. Do you want to try and manage to touch it?” Sandy nodded, and her mom took her hand and walked her closer to the kangaroo. The kangaroo seemed friendly, so they got a"
+    },
+    {
+      "id": "natural_en_0046",
+      "category": "natural_en",
+      "text": "Ben and Lily were playing in the park. They liked to swing, slide and run. They saw a big yellow post with a sign on it. The sign had many words and pictures. \"What is that?\" Lily asked. \"I don't know. Let's go and see,\" Ben said. They ran to the post and looked at the sign. It had words like \"park rules\", \"no littering\", \"keep off the grass\" and \"have fun\". It also had pictures of a dog, a trash"
+    },
+    {
+      "id": "natural_en_0047",
+      "category": "natural_en",
+      "text": "Lily loved to play the violin. She learned from her mom, who was very good at it. Lily wanted to be good too, so she practiced every day. She liked to make music and hear the sounds. One day, Lily went to school with her violin. She wanted to show her friends and teacher how well she could play. She was very excited and happy. She carried her violin in a case, but she was clumsy. She tripped on a"
+    },
+    {
+      "id": "natural_en_0048",
+      "category": "natural_en",
+      "text": "Lily and Ben were playing in the park. They liked to run, jump and slide on the grass and the swings. They saw a big tree with many leaves and branches. They wanted to discover what was behind the tree. They ran to the tree and looked behind it. They saw a small body with fur and ears. It was a rabbit! The rabbit was sleeping on the grass. It looked lovely and soft. \"Wow, look at the rabbit!\""
+    },
+    {
+      "id": "natural_en_0049",
+      "category": "natural_en",
+      "text": "Once upon a time there was a little girl named Lucy. She was three years old and very excited to go to the grocery store with her parents. When they arrived Lucy saw all the colorful things and couldn't wait to get something special. Her mom said, \"Remember Lucy, we must share. We can only get one of each thing!\" Lucy was sad. She really wanted to get more than one of each thing. But she knew her"
+    },
+    {
+      "id": "natural_en_0050",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a rich kid who liked to swing. The kid enjoyed swinging so much he wanted to swing forever! One day, the kid went to the river. There he found the biggest swing ever! It was so high that the kid couldn't reach it. But the rich kid didn't give up. He had an idea. The rich kid stood on a big rock and stretched out both his hands. He was able to grab the swing! The kid"
+    },
+    {
+      "id": "natural_en_0051",
+      "category": "natural_en",
+      "text": "Sara and Tom were playing in the park with their ball. They liked to kick the ball to each other and run after it. They were having fun and laughing. But then, the sky became dark and loud. Sara and Tom heard a big boom and saw a bright flash. It was lightning and thunder. They were scared and wanted to go home. \"Mommy, mommy, where are you?\" Sara called. \"Here I am, sweeties. Come, we have to"
+    },
+    {
+      "id": "natural_en_0052",
+      "category": "natural_en",
+      "text": "Alice was a little girl who loved going to the park to play. One day, she brought her friend Jack along with her to join all the fun. As they walked through the park, Alice spotted a large hairy animal. She ran up to it and asked Jack, \"What's that?\" He replied, \"That's a golf. It's a funny animal!\" Alice was delighted and started to applaud for the golf, who seemed very pleased. The golf started"
+    },
+    {
+      "id": "natural_en_0053",
+      "category": "natural_en",
+      "text": "Lily loved the ocean. She liked to watch the big waves and the fish and the birds. She wanted to go in the water and play, but her mom said no. She said the ocean was too deep and too cold for Lily. One day, Lily saw a playful dolphin near the shore. The dolphin jumped and splashed and made funny noises. Lily wanted to say hello to the dolphin, but her mom said no. She said the dolphin was too"
+    },
+    {
+      "id": "natural_en_0054",
+      "category": "natural_en",
+      "text": "Tom and Lily went to a restaurant with Mom and Dad. They liked the restaurant because it had many pictures on the walls and colorful plates. Mom and Dad told them to be careful and not to make a mess. Tom and Lily sat on their chairs and looked at the menu. They saw many things they liked, such as pizza, pasta, and ice cream. They told Mom and Dad what they wanted to eat. Mom and Dad nodded and"
+    },
+    {
+      "id": "natural_en_0055",
+      "category": "natural_en",
+      "text": "Sara wanted to play with her dolls, but she had to do her homework first. She did not like homework. It was hard and boring. She looked at the clock and saw that daddy would be home soon. She hoped he would play with her. She sighed and opened her book. She tried to write the letters and numbers, but they were too many and too small. She made mistakes and got angry. She threw her pencil and"
+    },
+    {
+      "id": "natural_en_0056",
+      "category": "natural_en",
+      "text": "Tom and Jen are friends. They like to play with toys. They have many toys, but they want more. They see a big automobile in the shop. It is red and shiny. It has four wheels and a horn. They think it is great. They ask their moms for the automobile. Their moms say no. They say it is too expensive and too big. They say they have enough toys. Tom and Jen are sad. They really want the automobile."
+    },
+    {
+      "id": "natural_en_0057",
+      "category": "natural_en",
+      "text": "Ben and Lily are friends. They like to play and joke with each other. Sometimes they joke too much and hurt each other's feelings. One day, Ben jokes that Lily is a baby and can't do anything. He laughs and runs away. Lily feels sad and angry. She cries and tells her mom. Mom hugs Lily and says, \"Ben is not a good friend. He is mean and rude. You should not play with him anymore.\" Lily nods and"
+    },
+    {
+      "id": "natural_en_0058",
+      "category": "natural_en",
+      "text": "Sam and Mia were friends who liked to play in the park. They liked to slide, swing, and whistle. They whistled loud and happy, like birds. One day, they saw a big truck with ice cream. They ran to the truck and asked for ice cream. \"Hello, little ones. Do you want some ice cream?\" the man in the truck said. He had a nice voice and a big smile. \"Yes, please!\" Sam and Mia said. They gave him some"
+    },
+    {
+      "id": "natural_en_0059",
+      "category": "natural_en",
+      "text": "Once upon a time there was a little child. The child was having lots of fun playing outside when suddenly they smelled something yummy. The child followed the smell to the kitchen. In the kitchen, the child met a big problem. A mean monster was eating all of the yummy treats! The child was scared, but bravely shouted at the monster to leave. The monster growled but didn't move. The little child"
+    },
+    {
+      "id": "natural_en_0060",
+      "category": "natural_en",
+      "text": "Lila and Tom were playing in the garden. They liked to look at the plants and flowers. They saw a big red pepper hanging from a green stem. Lila wanted to pick it and taste it. \"Look, Tom, a pepper!\" she said. \"It looks yummy. Can we have it?\" Tom was not sure. He remembered that Mom had told them not to touch the peppers. She said they were hot and spicy and could hurt their mouths. \"I don't"
+    },
+    {
+      "id": "natural_en_0061",
+      "category": "natural_en",
+      "text": "Once upon a time there was a little girl who loved to make music. She had a bright and colorful guitar and it was her most treasured possession. One day, her mom asked her to attach the guitar to her back. The little girl was confused and asked, \"Why would I do that?\". Her mom smiled and said, \"It will turn you into a normal-size guitar player!\". The girl gasped in surprise and said, \"That sounds"
+    },
+    {
+      "id": "natural_en_0062",
+      "category": "natural_en",
+      "text": "Mommy was tired. She wanted to decorate the room to make it look more special. She knew what to do: add lots of jazz! Mommy went to the store to get some things. She bought some colorful balloons and big streamers. She also got some special glittery stars. When she got home, she was so excited to start decorating. She hung the streamers by the windows and taped the glittery stars on the walls."
+    },
+    {
+      "id": "natural_en_0063",
+      "category": "natural_en",
+      "text": "\"Once upon a time there was a magical elf who lived deep in the forest. His name was Raiser. He was very special because he could make magical things happen. One day he decided to raise a bush from the ground. He waved a wand and said some magical spells. Then, from the nothingness a beautiful bush appeared. It was amazing. Raiser was so happy he started dancing around it. Suddenly a small rabbit"
+    },
+    {
+      "id": "natural_en_0064",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a fog that served everyone in the woods. It was thick and grey, and it made everything cloudy. The fog was kind and sweet and it served the birds, bugs and animals. It even let them play in it. But the fog got spoiled. The fog was sad and it wanted to serve everyone, but now it was bad. When it touched the birds and bugs, it made the animals ill. The animals and birds"
+    },
+    {
+      "id": "natural_en_0065",
+      "category": "natural_en",
+      "text": "Ben and Lily were playing with their toy animals in the living room. They liked to pretend they were in the jungle and make noises like the animals. Ben had a big lion and Lily had a small monkey. \"Roar!\" Ben said, making his lion jump on the couch. \"I am the king of the jungle and I am hungry. I will eat you, little monkey!\" Lily giggled and made her monkey swing from a pillow. \"No, no, you"
+    },
+    {
+      "id": "natural_en_0066",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a little girl who was playing in her garden. She liked to catch butterflies in her net. But one day, the girl found that her beautiful net had a big hole. She wanted to solve the problem, but she was only three years old, so she didn't know what to do. She ran inside and found her mother who looked at the net and smiled. Her mother said, \"Oh, I know how to solve that"
+    },
+    {
+      "id": "natural_en_0067",
+      "category": "natural_en",
+      "text": "One day, a young sailor was on a boat, discovering the sea. Suddenly, he looked down into the water and saw something disgusting. It was a huge fish, swimming away from him. The sailor called: \"Come back here! You are far too big for me to keep!\" But the fish didn't stop. The sailor was frustrated and he knew he'd have to do something. He grabbed his net and prepared himself for the battle. With"
+    },
+    {
+      "id": "natural_en_0068",
+      "category": "natural_en",
+      "text": "Once there was a boy called Peter. Peter was 3 years old and he loved to explore the world. One day he wanted to try something he had never done before: eating shrimp. He bought some expensive shrimp from the store. He was so excited to eat them. He went home and carefully placed the shrimp on his plate. When he opened the packet, the smell made him scream. It smelt so different! Peter took a"
+    },
+    {
+      "id": "natural_en_0069",
+      "category": "natural_en",
+      "text": "Once there were two friends who were both three years old. They approached a large frame together and one of them said to the other, \"Let's count the number of things in the frame.\" They counted together, one, two, three, four. The frame seemed calm and they both smiled. The first friend said, \"It's a lot, let's see if we can count it twice!\" Then they both counted again and kept getting to the"
+    },
+    {
+      "id": "natural_en_0070",
+      "category": "natural_en",
+      "text": "Once upon a time there was a lawyer who was very curious. He wanted to know everything about the world! One day he was walking down the street, when he noticed a puppy. The puppy seemed scared so the lawyer bent down and smiled at him. The puppy started to feel love for the lawyer. The lawyer gave the puppy a big hug. The lawyer and puppy became best friends. The lawyer would take the puppy for"
+    },
+    {
+      "id": "natural_en_0071",
+      "category": "natural_en",
+      "text": "Once there was a little boy. His name was Jack and he was only three years old. He had a back yard that was surrounded by a strong fence. All day long he would play in the yard, running and chasing butterflies. One day, Jack noticed the gate of the yard. It was locked! He couldn't understand why it won't open. He asked his mother, “Mommy, why is the yard locked?” His mother replied, “Well, that's"
+    },
+    {
+      "id": "natural_en_0072",
+      "category": "natural_en",
+      "text": "Lily and Ben were best friends. They liked to play with dolls and cars and books. One day, they decided to play marry. They put on their parents' clothes and rings and found a big carpet in the living room. \"Let's pretend this is a church,\" Lily said. \"You be the groom and I be the bride.\" \"OK,\" Ben said. \"But who will be the priest?\" They looked around and saw Lily's cat, Fluffy, sleeping on the"
+    },
+    {
+      "id": "natural_en_0073",
+      "category": "natural_en",
+      "text": "Once there was a little boy called Timmy. He was three years old and loved to explore the world. One day he decided to go on an adventure and find out what the world had to offer. Timmy decided to leave his house and go for a walk. But as he was about to leave his house, his Mom told him to be careful. Timmy was a bit fearful, but he was brave and managed to go outside anyway. On his adventure,"
+    },
+    {
+      "id": "natural_en_0074",
+      "category": "natural_en",
+      "text": "One day, Little Tom wanted to take a bath. He loved playing in the water. So his Mommy said to him, “Let’s bathe, Little Tom.” Little Tom was so happy. He got in the bath and played with his toys. His Mommy watched a film while Little Tom had his bath. Soon, Little Tom was so comfortable he fell asleep. When Little Tom woke up, he ran out of the bath and gave Mommy a big hug. He said, “Thank you,"
+    },
+    {
+      "id": "natural_en_0075",
+      "category": "natural_en",
+      "text": "Lily and Ben like to play in the park. They see a big hole with water in it. It is a puddle. They run to the puddle and jump in it. They splash with their feet and laugh. But then Lily's boot gets stuck in the mud. She tries to pull it out, but it is too tight. She says, \"Help, help, my boot is in the hole!\" Ben hears her and runs to her. He grabs her hand and pulls hard. He says, \"Don't worry, I"
+    },
+    {
+      "id": "natural_en_0076",
+      "category": "natural_en",
+      "text": "Once upon a time there was a little boy. He was three years old and loved animals. One day he found a swan who was injured and looked very scared. The little boy said, “Don’t be scared. I will help you.” He carefully folded the swan's wings so that she wouldn't fly away. He petted her and talked softly to her. Then he opened his sandwich and shared it with the swan. The swan continued to get"
+    },
+    {
+      "id": "natural_en_0077",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a rich family and they had a daughter called Emma. She was three years old, and had a very special talent - she could clap very loudly! One day, Emma was with her parents in the garden when she saw a microphone. She looked at it curiously and asked, “What is this?” Her mum said, “This is a microphone, sweetheart. You can talk into it and make your voice very loud!” So"
+    },
+    {
+      "id": "natural_en_0078",
+      "category": "natural_en",
+      "text": "Sam was a persistent boy. He always wanted to do things his way. He did not like to listen to his mom or dad. He did not like to share his toys or say sorry. One day, Sam wanted to play with his friend Max. But Max had a new toy that Sam did not have. Sam wanted to have the toy too. He asked Max to give him the toy. Max said no. He said it was his toy and he wanted to play with it. Sam got angry."
+    },
+    {
+      "id": "natural_en_0079",
+      "category": "natural_en",
+      "text": "Lily and Tom were playing in the park. They liked to slide, swing and run. Lily had a red hat that her mom gave her. She loved her hat very much. But then a big wind came and blew Lily's hat away. Lily ran after her hat, but it was too fast. She saw her hat fly over the fence and into the street. Lily was very sad and scared. \"Tom, help me! My hat is gone!\" she cried. Tom ran to Lily and hugged"
+    },
+    {
+      "id": "natural_en_0080",
+      "category": "natural_en",
+      "text": "Tom and Sam are friends. They like to play in the park. They like to swing on the swings. They swing high and low. They have fun. One day, it is very cold. Tom and Sam wear hats and coats. They go to the park. They see the swings. They run to the swings. They want to swing. But there is a cop in the park. He is big and strong. He has a badge and a hat. He says, \"Stop! You cannot swing today. The"
+    },
+    {
+      "id": "natural_en_0081",
+      "category": "natural_en",
+      "text": "One day, a clumsy crocodile was walking by the river. He saw a big box with a ribbon on it. He was curious and wanted to see what was inside. He tried to open the box with his teeth, but he could not. He tried to open the box with his claws, but he could not. He tried to open the box with his tail, but he could not. He was frustrated and angry. He saw a monkey sitting on a tree. He asked the"
+    },
+    {
+      "id": "natural_en_0082",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a clever little girl named Jane. She lived in a small valley filled with magical minerals. Every day she would explore the valley, wondering and admiring the beauty of each mineral. One day, as Jane was wandering, she saw a bright green mineral. She was fascinated by the sparkling color and she walked closer to it, trying to touch it. Suddenly, a voice appeared. \"Be"
+    },
+    {
+      "id": "natural_en_0083",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a very mysterious rocket. It had been hidden away in a far away place, and was now up for sale. John, a 3 year old child, was on his way to the market with his mom to buy some food, when he noticed the strange rocket. It was so big and shiny! He begged his mom to buy it. \"Mom, please! I need the rocket! Can we buy it? Please Mommy?\" John's mom thought for a moment"
+    },
+    {
+      "id": "natural_en_0084",
+      "category": "natural_en",
+      "text": "Once there was a sister who was very wise. She always tried to value the things around her. Every day, she would take time out to look at her surroundings and appreciate them. One day, while she was looking out of their window, she saw her little brother. He was three years old and she could tell he was feeling a bit down. So, she beckoned her brother to come over and she gave him a big hug. She"
+    },
+    {
+      "id": "natural_en_0085",
+      "category": "natural_en",
+      "text": "Lily and Tom were playing in their room. They had many toys, but they liked to make new ones with things they found. They saw a lamp on the table. It was old and dusty. They wanted to see if it worked. \"Let's plug it in and turn it on,\" Tom said. He took the cord and put it in the wall. Lily reached for the switch. \"Wait, I have an idea,\" Tom said. He ran to the kitchen and came back with a"
+    },
+    {
+      "id": "natural_en_0086",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a little girl named Mary. She was walking through a forest and chattering away happily to herself. Suddenly, she saw an ancient branch up ahead. Mary reached out and touched it and the branch started to shake. A small frog jumped down onto the ground and said, \"Hello there! What brings you here to my forest?\". Mary replied, \"I'm just walking and exploring the forest.\""
+    },
+    {
+      "id": "natural_en_0087",
+      "category": "natural_en",
+      "text": "Once upon a time there was a tall human named Tom. Tom was very smart and liked to study. Every day he would spend time at school studying with his friends. One day he asked his teacher a question. “Teacher,” said Tom, “Can I study about people?”"
+    },
+    {
+      "id": "natural_en_0088",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a mighty navy ship. Onboard was a sailor and his parrot. The sailor was on a mission to remove something from the ship. The parrot asked, \"What are you removing from the ship?\" The sailor said, “It’s a big secret, but I have to remove a wooden box.” The parrot said, “That sounds mighty difficult! How are you going to do it?\" The sailor replied, “I’ll use my special"
+    },
+    {
+      "id": "natural_en_0089",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a kite that belonged to a little boy. He loved to run and play with it in the park. One day, he looked up in the sky and saw a big, scary cloud. He was so scared, he dropped the kite and ran away. The kite started to fly higher and higher, right into the scary cloud. The little boy tried to get back his kite, but it was gone. He felt sad and kept looking around the"
+    },
+    {
+      "id": "natural_en_0090",
+      "category": "natural_en",
+      "text": "Once there was a small zoo in the middle of town. One day, Sue the zookeeper was out walking and feeding the animals when she noticed something strange. One of the pandas was acting very nervous and shaking. When Sue touched its fur, it panicked and ran off. Sue was scared and she didn't know what to do. She went to ask Cotton, the zookeeper next door, for help. Cotton saw the panda and knew"
+    },
+    {
+      "id": "natural_en_0091",
+      "category": "natural_en",
+      "text": "Once there was a little girl. She loved to explore. One day she went to show her mom what she had found. It was round and bright. The little girl's mom said it was safe to pick up. The little girl was so excited as she picked it up and moved it around in her hands. She showed it to everyone she saw and talked about how it was so round and so safe. The little girl continued to show her round and"
+    },
+    {
+      "id": "natural_en_0092",
+      "category": "natural_en",
+      "text": "Lena loves gum. She likes to chew it and blow big bubbles. She has a lot of gum in her pocket. She wants to share it with her friends at the park. She sees Tom and Anna playing on the swings. She runs to them and says, \"Hi, do you want some gum? I have many colors. You can choose.\" Tom smiles and says, \"Yes, please. I like gum too. Can I have the red one?\" Lena gives him the red gum and says,"
+    },
+    {
+      "id": "natural_en_0093",
+      "category": "natural_en",
+      "text": "Once there was a grumpy bear who lived in a small wooden drawer. He lived there all alone and was never happy. Every day he would spend his time polishing the drawer. One day, a little rabbit went hopping by and noticed the bear polishing. \"Why are you so grumpy?\" the rabbit asked. \"I'm polishing this drawer, but it never looks the way I want it to,\" the bear grumbled. The little rabbit smiled"
+    },
+    {
+      "id": "natural_en_0094",
+      "category": "natural_en",
+      "text": "Once there was a small animal. She was very organized. She kept her toys and food in neat piles. Every morning the animal would go for a run. She would speed along the path and go very fast. Everyone in the park would stop and watch her. Even the birds and bugs were amazed. When she was done running, she would go back to her organized piles and put everything back in place. The animal was very"
+    },
+    {
+      "id": "natural_en_0095",
+      "category": "natural_en",
+      "text": "Anna liked to read books. She had many books in her room. She read books about animals, and books about people, and books about places. She learned new words from books. One day, Anna found a big book in the attic. It was a book about lumber. Lumber was wood that people cut from trees. People used lumber to make houses, and boats, and toys. Anna wanted to read the book about lumber. She opened"
+    },
+    {
+      "id": "natural_en_0096",
+      "category": "natural_en",
+      "text": "Sara and Ben were playing in the sand. They had a bucket and a spade each. They wanted to make a big castle with towers and bridges. \"Look, Sara, I made a tower!\" Ben said, showing his spade. \"Wow, Ben, that's very good!\" Sara said, smiling. \"Can I make a bridge?\" \"Sure, Sara, you can make a bridge. Here, use my spade. It's bigger and stronger.\" Ben said, handing his spade to Sara. \"Thank you,"
+    },
+    {
+      "id": "natural_en_0097",
+      "category": "natural_en",
+      "text": "Tom likes to play with his drum. He bangs it loud and fast. He makes a lot of noise. His mom and dad do not like the noise. They say, \"Tom, stop playing with your drum. It is too loud. It is bad for your ears and ours.\" But Tom does not stop. He likes his drum too much. He thinks it is fun. He wants to make more noise. He looks around his room. He sees his toys. He has a lot of toys. He has cars,"
+    },
+    {
+      "id": "natural_en_0098",
+      "category": "natural_en",
+      "text": "John had a very humble home. Every day he would pack his blocks away. He had to be careful though because his blocks were very special. One day he put his blocks in his bag and went outside. He found some friends and they had great fun with the blocks. They all built a tall tower, and it was the tallest tower anyone had ever seen. John and his friends had so much fun playing together with the"
+    },
+    {
+      "id": "natural_en_0099",
+      "category": "natural_en",
+      "text": "Mia and her dad were walking in the park. Mia was feeling excited. She saw all the others children playing, laughing and jumping around. Mia's dad said, \"Come on Mia, why don't you play too?\". Mia was proud and wanted to show her dad something special. She laughed and said, \"I can make a joke!\". Mia's dad smiled and said, \"Go ahead\". Mia thought hard and then said, \"What do you call a tuna in"
+    },
+    {
+      "id": "natural_en_0100",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a blue bird that lived in the woods. He wanted to make his bird home the neatest, tidiest place he knew! Every day he went out and tidied up the bird home, putting everything back in order and making it look so neat. One day he saw two other birds who were playing together and not looking after their bird home at all. The blue bird felt that they were being very"
+    },
+    {
+      "id": "natural_en_0101",
+      "category": "natural_en",
+      "text": "Once upon a time there was a polite girl named Eva. One day Eva was walking in the park when she saw a deep pit. Eva was curious to know what was inside, so she went over and looked in. Suddenly, a strange voice said, “Come in!” Eva was surprised but she was polite. She leaned over the pit and said, “Hello? Who’s there?” The voice replied, “Come in and you’ll find out!” Eva was a bit scared but"
+    },
+    {
+      "id": "natural_en_0102",
+      "category": "natural_en",
+      "text": "Lily and Ben are friends. They like to play in the park. They see many things in the park. They see trees, flowers, birds, and swings. Lily has an idea. She says to Ben, \"Let's pick some flowers and make a crown. That is fun and creative.\" Ben likes the idea. He says, \"Yes, let's do that. I will pick yellow flowers. You pick purple flowers.\" They run to the flower bed. They pick some flowers."
+    },
+    {
+      "id": "natural_en_0103",
+      "category": "natural_en",
+      "text": "Once there was a young apple that wanted to go and play in the sun. She thought it would be so much fun. But when she came to the sun, it began to rot her away. She was so very sorry. The apple tried to get away but it was too late. The sun had already done its damage. She sadly spoke her last words, \"I should have never gone near the sun\". The apple realized it was too late when the sun had"
+    },
+    {
+      "id": "natural_en_0104",
+      "category": "natural_en",
+      "text": "Tim and Lily were playing in the park. They liked to run and jump and slide. They saw a big hill with flowers and grass. They wanted to go up the hill and see what was on the other side. They ran up the hill, holding hands. They felt the wind in their hair and the sun on their faces. They laughed and shouted. They were happy. But when they got to the top of the hill, they saw a big fence. The"
+    },
+    {
+      "id": "natural_en_0105",
+      "category": "natural_en",
+      "text": "Sara liked to feed the birds in the park. She had a bag of bread and seeds that she broke into small pieces. She threw them on the grass and watched the birds come and eat. She saw sparrows, pigeons, ducks and a big black crow. One day, a woman came to the park. She was old and wore a long coat and a hat. She had a big stick that she used to walk. She looked angry and bitter. She did not like the"
+    },
+    {
+      "id": "natural_en_0106",
+      "category": "natural_en",
+      "text": "Once there was a little girl named Ruth. She was just three years old and she had a brush. Every day, the brush helped Ruth to comb her long, pretty hair. One day, Ruth's brush broke. She was so sad. She asked her mom for a new brush, and mom gave her a very reliable one. Ruth was so happy! Ruth loved her new brush very much, and she used it to comb her hair every day. She was careful to keep the"
+    },
+    {
+      "id": "natural_en_0107",
+      "category": "natural_en",
+      "text": "Once upon a time there were two friends, Tilly and Sam. They liked to play together and share things. One day they had a clever idea, to draw a box with four squares. They coloured in the squares carefully, and it looked very pretty. When they had finished, they turned to each other, ready to share their work. But suddenly, Tilly changed her mind and said that she wanted to keep the box all to"
+    },
+    {
+      "id": "natural_en_0108",
+      "category": "natural_en",
+      "text": "Once there was a little boy called Tom. Tom loved playing with balls. He would roll them up and down the street every day. One day, Tom was rolling a ball and he saw something special. It was a rare pear! It was a beautiful yellow colour and it was so shiny. Tom had never seen a pear like this before. He got excited and quickly rolled the ball over to the pear. He picked it up and it felt so soft"
+    },
+    {
+      "id": "natural_en_0109",
+      "category": "natural_en",
+      "text": "In the park, there were two little rabbits, hopping around. The big one was white and fluffy, while the small one was grey and furry. The big rabbit said, \"Let's play a sport!\" The small rabbit hopped excitedly and said, \"Yes! What shall we play?\" The big rabbit thought for a moment and said, \"Let's hop up and down the hill!\" The small rabbit clapped his furry paws together and said, \"Yes! That"
+    },
+    {
+      "id": "natural_en_0110",
+      "category": "natural_en",
+      "text": "Once upon a time there was a little girl named Jenny. Jenny was a very naughty girl. Every day she would get into all sorts of mischief. One day, her parents warned her about the pepper which grew in their garden. They said if she touched it, she would get very itchy. But Jenny didn't care, and she kept touching the pepper plants. However, one day something strange happened. Jenny was playing in"
+    },
+    {
+      "id": "natural_en_0111",
+      "category": "natural_en",
+      "text": "One day, a boy was walking through a field. He saw a rabbit and he was very excited. He tucked his hands into his pockets and walked up to it. He said hello to the rabbit. The rabbit was troubled and didn't respond. The boy was puzzled but decided to try and help the rabbit. He asked it what was wrong. The rabbit looked around and said it was thirsty. The boy smiled, he knew just what to do. He"
+    },
+    {
+      "id": "natural_en_0112",
+      "category": "natural_en",
+      "text": "Once upon a time there was a little boy. He lived in a small house and had a crib in his bedroom. Every night the boy would whistle a little song to himself. One day the boy was playing with his toys in his bedroom when he heard a strange noise. The noise was coming from his crib. He went to the crib and slowly opened the door. Inside he saw a little mouse! The mouse was quiet and scared. The"
+    },
+    {
+      "id": "natural_en_0113",
+      "category": "natural_en",
+      "text": "One day, two children called Jenny and Billy were playing near the shore. They were very happy, but they were also a bit anxious. All of a sudden, they noticed a huge sack on the sand. It was too big for either of them to carry, so they decided to play a game. They each took one of the handles, and they each pulled their end as hard as they could. The sack was so heavy they had to strain, but"
+    },
+    {
+      "id": "natural_en_0114",
+      "category": "natural_en",
+      "text": "Once there was a 3 year old girl named Daisy. She was so excited because she was about to go to school. Daisy loved learning new things and meeting her friends there. But on the first day of school, Daisy was feeling scared. She was worried about making new friends and being independent. Just then, Daisy's mom walked up to her and said, “Don’t be scared, Daisy. Believe in yourself and you can do"
+    },
+    {
+      "id": "natural_en_0115",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a dog. His name was Spot. Spot was very excited one day when he saw a pipe. He leaned down to sniff it. Suddenly, the pipe made a loud noise and smoke came out! Spot was scared and ran away. Unfortunately, he didn't run fast enough. The smoke made him sick and he had to go to the vet. The vet told Spot that it was not a safe pipe. Although Spot was sad, he was grateful"
+    },
+    {
+      "id": "natural_en_0116",
+      "category": "natural_en",
+      "text": "Anna and Ben are friends. They like to play at the beach. They make sand castles and look for shells. They are happy. One day, they see a baby turtle on the sand. The baby turtle is lost. It wants to go to the water, but it is too far. Anna and Ben feel sorry for the baby turtle. \"Look, Ben, a baby turtle!\" Anna says. \"It needs help!\" \"Let's rescue it, Anna!\" Ben says. \"We can carry it to the"
+    },
+    {
+      "id": "natural_en_0117",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a young girl named Jane. Jane wanted to have an adventure. So, one day she decided to go on a big wander. She put on her colourful dress and headed out. Jane walked and walked until it was dark outside. She was feeling scared and cold, but she still kept wandering. After a while, she came to a deep, dark forest. Jane was worried, but something inside her told her to"
+    },
+    {
+      "id": "natural_en_0118",
+      "category": "natural_en",
+      "text": "Ben and Sam were brothers who liked to play outside. One day, they saw a big dog in the park. The dog had black fur and sharp teeth. It looked angry and hungry. \"Let's go pet the dog!\" Sam said. He ran towards the dog. \"Stop, Sam!\" Ben warned. \"The dog might bite you. It is not our friend. It is a wild dog.\" But Sam did not listen. He wanted to touch the dog. He reached out his arm to the dog."
+    },
+    {
+      "id": "natural_en_0119",
+      "category": "natural_en",
+      "text": "Tim likes trains a lot. He has many train toys in his room. He plays with them every day. He makes train sounds and pretends to be a driver. One day, his mom tells him they are going to see real trains. Tim is very happy. He puts on his coat and hat and goes with his mom to the bus. The bus takes them to the train station. At the train station, Tim sees many big trains. They are shiny and loud."
+    },
+    {
+      "id": "natural_en_0120",
+      "category": "natural_en",
+      "text": "Lily and Ben were playing dress-up in their room. They put on their mom's and dad's clothes and pretended to be grown-ups. Lily wore a big dress and a hat. Ben wore a suit and a tie. They had a tea party with their stuffed animals. \"Would you like some tea, Mr. Bear?\" Lily asked, holding a toy cup. \"Yes, please, Mrs. Cat,\" Ben answered, making a deep voice. He took the cup and pretended to drink."
+    },
+    {
+      "id": "natural_en_0121",
+      "category": "natural_en",
+      "text": "Once there was a little girl named Sofia. She was three years old and the most curious person in the whole world. One day, she was out in her garden looking for something. All of a sudden, she found a harmless birdcage. Sofia was very excited. She shouted out, \"Look mummy, what I have found!\" Mummy replied, \"Wow, lovely Sofia, that's a birdcage! What are you going to do with it?\". Sofia thought"
+    },
+    {
+      "id": "natural_en_0122",
+      "category": "natural_en",
+      "text": "Lily and Max were playing with their toys in the living room. Lily had a doll and Max had a car. They were having fun until Max saw Lily's doll and wanted it. \"Give me your doll!\" Max demanded. \"It is pretty and has a dress.\" \"No!\" Lily said. \"It is mine and I like it. You have your car.\" \"But I want your doll too!\" Max said. He tried to grab the doll from Lily, but she held it tight. \"Stop it,"
+    },
+    {
+      "id": "natural_en_0123",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a small girl. She liked to explore and discover things. One day, she went to find a building. When she got there, she noticed the building was very big and tall. She was so surprised! The girl went inside to take a look. Everything looked so strange to her. As she was walking around the building, she noticed something bitter in the air. She sniffed and sniffed but she"
+    },
+    {
+      "id": "natural_en_0124",
+      "category": "natural_en",
+      "text": "It was a beautiful day outside as the sun shined. Sam wanted to go outside, but it started to rain. Sam was sad because he wanted to play so he opened the door to check. Outside the rain made it peaceful and cozy. Sam smiled and decided to take a nap. He opened the window and looked outside. The raindrops were still trickling down. Sam loved the sound the rain made, it was so peaceful. He watched"
+    },
+    {
+      "id": "natural_en_0125",
+      "category": "natural_en",
+      "text": "Tom and Lily are friends. They like to play catch with a ball. One day, they go to the park with their moms. The park has a big grass and many trees. Tom and Lily have fun with the ball. \"Throw it to me, Tom!\" Lily says. \"OK, Lily!\" Tom says. He throws the ball high in the air. Lily runs to catch the ball. She does not see the street. The street has many cars. The cars go fast and make noise. One"
+    },
+    {
+      "id": "natural_en_0126",
+      "category": "natural_en",
+      "text": "Once upon a time there was a nosy lumberjack. He was always busy looking for lumber, no matter what was going on. One day, the lumberjack came upon a wonderful tree. He decided this was the perfect tree to bring down. But when the lumberjack started to cut down the tree, a little bird flew up to him. He said, in a small voice, \"Please do not destroy my home!\" The lumberjack was surprised, and he"
+    },
+    {
+      "id": "natural_en_0127",
+      "category": "natural_en",
+      "text": "Dave and his mom were getting ready for their day. Dave was excited because today was going to be special. Mom asked \"What do you think we should do today?\" Dave replied, \"Let's go to the park and have some fun!\" Mom and Dave drove to the park. When they got there, Dave saw the playground. He could barely contain his excitement. Dave shouted, \"I feel like I belong here. Let's play.\" Mom joined in"
+    },
+    {
+      "id": "natural_en_0128",
+      "category": "natural_en",
+      "text": "Once upon a time, there were two friends named Steve and Tina who were going on a trip. Steve had a backpack and Tina had a suitcase. Steve turned to Tina and asked, “Where do you want to travel?” “I don’t know,” Tina said. Suddenly, an idea came to Steve. He said, “Let’s go to the deep sea! We can see the fish and other animals there.” Tina was excited and nodded her head. The two friends set"
+    },
+    {
+      "id": "natural_en_0129",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a gentle race. It was special because everyone raced with prunes. Every day the people in the race dashed and dashed until they crossed the finish line. All the while the prunes bounced along joyfully. One day, a little boy named Timmy joined the race. He had never raced with prunes before and was a bit scared. But as soon as he started moving with the prunes, he"
+    },
+    {
+      "id": "natural_en_0130",
+      "category": "natural_en",
+      "text": "Ben and Lily went to the park with their mom. They saw a man with a new cane. He walked very slow and had a dog with him. \"Hello, sir. What is your dog's name?\" Lily asked. \"His name is Spot. He is my friend. He helps me walk,\" the man said. \"Can we pet him?\" Ben asked. \"Sure, but be gentle. He is old and tired,\" the man said. Ben and Lily petted Spot. He wagged his tail and licked their hands."
+    },
+    {
+      "id": "natural_en_0131",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a little girl called Daisy. Daisy was a curious three year old who wanted to explore the world. One day, she wanted to taste the sky. She thought, “If I can get to the top of the highest mountain, I can look up and taste the sky”. So, she asked her brother, “Can I taste the sky?”. Her brother smiled, then said, “No Daisy, the sky is too far away”. But Daisy wouldn't"
+    },
+    {
+      "id": "natural_en_0132",
+      "category": "natural_en",
+      "text": "Once upon a time there were two friends, Beth and Jim. Beth was very envious of Jim's new toy that he had just chosen. Beth wanted the toy very much and so she asked Jim if she could have it. But Jim said no, it was his toy and he would not choose to give it to Beth. Beth was so sad and angry. In a fit of rage, she slammed her hands down onto the floor. Suddenly, a spark of energy came from her"
+    },
+    {
+      "id": "natural_en_0133",
+      "category": "natural_en",
+      "text": "Tom and Sam are friends. They like to play catch with a ball. They go to the park with their moms. The park has a big field and a pond. Tom throws the ball to Sam. Sam tries to catch it, but he misses. The ball rolls into the pond. \"Oh no!\" Sam says. \"Our ball is gone!\" Tom and Sam run to the pond. They see the ball floating on the water. It is too far to reach. They look around. They see a man"
+    },
+    {
+      "id": "natural_en_0134",
+      "category": "natural_en",
+      "text": "Sara and Ben are twins. They like to play in the garden. They see a bird with a broken wing. The bird is angry. It pecks and squawks at them. \"Go away, go away!\" the bird says. \"Shh, bird, we want to help you,\" Sara says. \"Your wing is hurt. You need to bathe it.\" Ben runs to the house. He brings a bowl of water and a cloth. He puts the bowl on the ground. He tries to catch the bird. \"Ow, ow,"
+    },
+    {
+      "id": "natural_en_0135",
+      "category": "natural_en",
+      "text": "Once upon a time, a little girl named Emily was walking through a forest. As she walked, she began to tremble. Suddenly, she saw a small pie sitting on a rock. Emily was very excited and ran closer to the pie. When she reached the pie, Emily saw the pie was quite modest. She thought to herself, \"I should take this pie home for my family.\" Just then, Emily heard a voice coming from the pie. It"
+    },
+    {
+      "id": "natural_en_0136",
+      "category": "natural_en",
+      "text": "Mama and Papa took their little boy to the park and he saw the swings. He was so excited to try out one of the swings! He shouted \"I want to swing!\" and Mama said, \"Ok, be careful!\" Mama and Papa watched him happily as he swung back and forth. He smiled and laughed, feeling so free. Then he stopped and said, \"I'm hungry!\" Papa told him, \"We'll go to a friendly restaurant, and you can get a"
+    },
+    {
+      "id": "natural_en_0137",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a raven who liked to hop. Every day, he'd hop from tree to tree, from one side of the forest to the other. One day, he saw a group of strange birds, who didn't hop. Curious, he flew over and spoke to them. “What are you doing?” the raven asked. “We’re walking, this is the normal way to move,” the birds replied. So the raven joined them, walking alongside them, but he"
+    },
+    {
+      "id": "natural_en_0138",
+      "category": "natural_en",
+      "text": "Sara and Ben are twins. They like to play outside in the snow. They make a big snowman with a hat and a scarf. They give him a carrot nose and two coal eyes. \"Hello, Mr. Snowman!\" Sara says. \"You are our friend!\" \"Yes, you are!\" Ben says. \"But it is very cold. Let's go inside and have some hot cocoa.\" They start to walk back to their house. But then they see a shadow in the snow. It is a little"
+    },
+    {
+      "id": "natural_en_0139",
+      "category": "natural_en",
+      "text": "Lily liked to play with her dolls. She had many dolls, but her favorite was Anna. Anna had long hair, a pink dress and a smile. Lily took Anna everywhere with her. One day, Lily saw a big box in the living room. It was a gift from her grandma. Lily opened the box and found a new shelf. The shelf had many spaces for her dolls. Lily was happy. She wanted to put Anna on the shelf. But when she tried"
+    },
+    {
+      "id": "natural_en_0140",
+      "category": "natural_en",
+      "text": "Anna and Ben were playing in the park. They saw a big hill with many rocks and trees. They wanted to climb the hill and see what was on the other side. \"Let's go, Ben!\" Anna said. \"Maybe we can find something fun!\" \"OK, Anna!\" Ben said. \"But be careful, the rocks are sharp and the trees are prickly.\" They started to climb the hill, holding hands and helping each other. They saw some birds and"
+    },
+    {
+      "id": "natural_en_0141",
+      "category": "natural_en",
+      "text": "Timmy was a very envious little boy. Every time he saw his older brother playing in the hallway with his new toys, he wished he had something as fun and exciting. One day, his mom told them both to go play in the backyard. Timmy started playing in the sandbox and soon enough he had built the biggest castle he had ever seen. He was so proud he ran back inside to show his mother. When Timmy got"
+    },
+    {
+      "id": "natural_en_0142",
+      "category": "natural_en",
+      "text": "Once upon a time there lived a kind king. The king smiled at everyone he met and made people feel happy. One day, something bad happened to the kind king. He felt very hurt. The king didn't know how to make the hurt go away. He tried many things but nothing worked. So the king decided to take a long walk. As he walked, he noticed something wonderful. He saw a rising sun, trees blowing in the wind"
+    },
+    {
+      "id": "natural_en_0143",
+      "category": "natural_en",
+      "text": "Tom and Lily were playing in the park. They liked to slide, swing and run. They saw a big dog with a belt around its neck. The dog was brown and white and had long fur. \"Can we pet the dog?\" Lily asked Tom. \"I don't know. Maybe we should ask the owner first,\" Tom said. They looked around and saw a man sitting on a bench. He was reading a book and did not notice the children. \"Hello, mister. Can"
+    },
+    {
+      "id": "natural_en_0144",
+      "category": "natural_en",
+      "text": "Mummy was very excited, she had a calendar in her hands. She said, \"Today is a special day, because it's Grandma's birthday!\" Mummy and the little girl went to Grandma's house. Grandma was very friendly and said, \"happy birthday to me!\" She gave the little girl a big hug and a kiss. The little girl said, \"Today is a special day!\" Grandma smiled and said, \"Yes, it is. I'm so glad you're here so we"
+    },
+    {
+      "id": "natural_en_0145",
+      "category": "natural_en",
+      "text": "One day, a nice girl called Emily was in the park with her family. She was carrying a big napkin and everyone was having a lot of fun. Suddenly, something magical happened. Emily saw a beautiful butterfly land on the napkin she was carrying. It had big, colourful wings and it was so pretty! Emily said, \"Oh wow! Can I keep it?\" Her dad replied, \"Yes, of course you can. It can be a nice pet for"
+    },
+    {
+      "id": "natural_en_0146",
+      "category": "natural_en",
+      "text": "Mum and Dad had a big surprise for Alice and Max. They were separated and taken to different rooms. Mum and Dad said it was a game. Alice was excited and wanted to know what the game was. Mum and Dad said they had to find their waistbands. They showed Alice and Max a large box filled with waistbands of different colours and sizes. The waistbands were big and made of paper. Max found the first"
+    },
+    {
+      "id": "natural_en_0147",
+      "category": "natural_en",
+      "text": "Tom and Sam were best friends. They liked to play with cars, balls and blocks. One day, they found a big box in the park. They opened it and saw many shiny toys inside. \"Wow, look at these!\" Tom said. He grabbed a red car and a blue truck. \"These are mine!\" Sam looked at the toys too. He saw a yellow bike and a green plane. He wanted to play with them, but Tom did not let him. \"No, these are mine"
+    },
+    {
+      "id": "natural_en_0148",
+      "category": "natural_en",
+      "text": "Once there was a boy and his dad. They had a little workshop with a lot of tools in it. Dad was a carpenter and made tables, chairs and other furniture. Boy wanted to help his dad and asked \"Can I make something too?\" Dad said \"Yes, you can. You will make a little table out of steel\". So Boy got to work. He was so persistent and kept working until the table was made. But when Dad came back from"
+    },
+    {
+      "id": "natural_en_0149",
+      "category": "natural_en",
+      "text": "One day, a little girl named Amy was out on an adventure. She had brought her wagon with her and was on her way to the ancient temple. As she approached the temple, she noticed a big pile of stones and rocks on the path. Amy stopped and said to herself, \"I need to sort this mess out and make a path, or I'll never make it to the temple!\" She got to work and started moving the rocks around. After a"
+    },
+    {
+      "id": "natural_en_0150",
+      "category": "natural_en",
+      "text": "Lily and Ben were hungry. They wanted to eat waffles for breakfast. But Mom was still sleeping. Lily and Ben decided to make waffles by themselves. They were careful not to wake up Mom. They went to the kitchen and found the waffle maker. They plugged it in and turned it on. They opened the fridge and took out the waffle mix and the syrup. They poured some waffle mix into the waffle maker and"
+    },
+    {
+      "id": "natural_en_0151",
+      "category": "natural_en",
+      "text": "Once upon a time there was a little boy. He was sad because his friend was sick. He wanted to make his friend feel better, but he was frustrated because he couldn't. One day a bright and shiny helicopter flew down from the sky. The little boy was excited, but he was still worried about his friend. The helicopter brought a special doctor with it. The doctor said he could heal his friend. The"
+    },
+    {
+      "id": "natural_en_0152",
+      "category": "natural_en",
+      "text": "One day, a little bunny was hopping around the garden. He had a pocket full of carrots and was happily munching on them. Suddenly, the bunny heard a loud noise. He stopped and looked around, but he couldn't see anything. The bunny hopped a bit closer, and he saw a fox. The fox saw the bunny and began to creep closer. The bunny knew he had to be careful, so he warned the fox to stay away. He took"
+    },
+    {
+      "id": "natural_en_0153",
+      "category": "natural_en",
+      "text": "Kara was a very busy girl. Every day she polished many things - from her shoes to her dresser. One day, her mother gave her a very special present - a bright yellow lemon! Kara was very happy and held the lemon tight in her hand. She couldn't wait to show it to her friends. But first, she decided to polish it. She was careful to make sure it was shining brightly! Later that day, Kara took her"
+    },
+    {
+      "id": "natural_en_0154",
+      "category": "natural_en",
+      "text": "Tom and Lily are friends. They like to play sport in the park. They can run, jump, kick and throw. They have fun and laugh a lot. One day, they see a new boy in the park. His name is Sam. He has a ball and a bat. He asks Tom and Lily if they want to play with him. They say yes and go to him. Sam says he is very good at sport. He says he can hit the ball very far and run very fast. He says he can"
+    },
+    {
+      "id": "natural_en_0155",
+      "category": "natural_en",
+      "text": "One day, Mia went to the beach with her mom. She was so excited to go because she had never been before. Mia's mom said, \"Let's take a walk and feel the sand.\" Mia was so happy that she started running. The sand was soft and nice and she couldn't believe how amazing it felt. When they went to the water, her mom said, \"Let's go in and feel the salt!\" Mia was afraid at first, but then she started"
+    },
+    {
+      "id": "natural_en_0156",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a little mouse named Timmy. He was a bit shy, so he didn't make many friends. One day, Timmy found a tunnel. He was a bit scared to go in, but he was also curious. So he went in! Inside the tunnel was a group of friendly animals. They were all excited to meet Timmy and introduce themselves. The friendly animals taught Timmy all sorts of fun things. They showed him how"
+    },
+    {
+      "id": "natural_en_0157",
+      "category": "natural_en",
+      "text": "One day, there was a big tough earthquake. Bill and Sue were playing in their backyard. Suddenly, Bill felt the ground shaking. He shouted, \"Sue, there's an earthquake!\" Sue looked up and saw the sun shining brightly in the sky. She said, \"Look, the sun is still shining.\" Bill replied, \"Yes, the sun is still shining even when the ground shakes.\" They both hugged each other, feeling safe even in"
+    },
+    {
+      "id": "natural_en_0158",
+      "category": "natural_en",
+      "text": "One day, Jenny and her Mommy were in the park. Jenny was so excited to be there, because she loved to play on the swings and the slide. She was running around chasing butterflies, when she suddenly heard a loud and scary voice. \"Stop!\" shouted the voice. Jenny and her Mommy stopped in their tracks. Looking up, they saw a tall man wearing a policeman's uniform. He had a large mustasche and spoke"
+    },
+    {
+      "id": "natural_en_0159",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a brave bear named Benji. Benji was strong and fast and loved to zoom around. One day, while he was zooming, he came across a big pond. In the middle of the pond was a monster that looked really scary! Benji stopped to take a closer look. He was scared but he was brave, too. He wanted to see what was in the pond, so he zoomed around to the other side and looked in. The"
+    },
+    {
+      "id": "natural_en_0160",
+      "category": "natural_en",
+      "text": "Anna and Ben are twins. They like to play with blocks and build things. One day, they find a big box in the garage. It has many pieces of wood and screws and a paper with pictures. The box says \"crib\". \"What is a crib?\" Anna asks. \"I don't know. Maybe it is a big bed for babies,\" Ben says. \"Let's build it and see,\" Anna says. They take out the pieces and try to follow the pictures. They use a"
+    },
+    {
+      "id": "natural_en_0161",
+      "category": "natural_en",
+      "text": "One day, a girl named Suzy was playing outside. She saw a film in the sky - it was very bright and colourful. Suzy was curious and asked her mum what it was. Her mum said it was a rainbow, and that it's made after a storm. When Suzy went inside the house, she saw her dad looking very angry. She asked her dad why he was feeling angry. He said it was because he couldn't understand a film he was"
+    },
+    {
+      "id": "natural_en_0162",
+      "category": "natural_en",
+      "text": "Once upon a time there was a foolish boy who forgot his nurse's instructions. One day, the boy wanted to go play outdoors. The nurse said, \"No, you must stay inside.\" But the foolish boy forgot the nurse's instructions and ran outside. When the nurse noticed that he had gone outside, she ran out of the house and called the boy back. She said, \"Why did you forget my instructions! You were supposed"
+    },
+    {
+      "id": "natural_en_0163",
+      "category": "natural_en",
+      "text": "Once upon a time there was a very shy musician. She loved to fly in the sky, but she was too shy to tell anyone. Every day after school she would fly around the town, careful so no one would see her. One day, a little girl saw the shy musician soaring in the sky. She was very excited, and waved to the musician to invite her to come down to the ground. The musician was so happy to find a friend."
+    },
+    {
+      "id": "natural_en_0164",
+      "category": "natural_en",
+      "text": "Tom and Mia are playing in the park. They see a big car with shiny wheels. They want to go inside and pretend to drive. \"Look, a key!\" Tom says. He finds a key on the ground near the car. He picks it up and runs to the car door. \"Wait for me!\" Mia says. She follows Tom and tries to catch him. Tom is fast, but Mia is faster. She grabs his arm and stops him. \"Tom, no!\" Mia says. \"That is not our"
+    },
+    {
+      "id": "natural_en_0165",
+      "category": "natural_en",
+      "text": "Once there was a frog who loved to play in the pond. He liked to swim around the rocks and admire the shell in the mud. One day the frog spotted a shiny shell. He got quite close to it. It was very pretty. He asked the shell, \"Can I have you?\" The shell said, \"No, this shell is not yours.\" The frog was sad but he didn't give up. He decided to try and steal the shell. He sneaked up to the shell"
+    },
+    {
+      "id": "natural_en_0166",
+      "category": "natural_en",
+      "text": "Once upon a time, there were two best friends called Jenny and Tom. They were 3 years old and liked to have a lot of fun together. One day, Jenny and Tom had a great idea. \"Let's bounce!\" yelled Tom. Jenny jumped up and down and said, \"Yes, let's!\" So, Jenny and Tom started to bounce all around the house. They bounced here and there and even in their bedroom. They had a lot of fun. But then,"
+    },
+    {
+      "id": "natural_en_0167",
+      "category": "natural_en",
+      "text": "Tom and Sue were hungry. They wanted to eat lunch. Mom said they could have some salad from the fridge. Tom and Sue liked salad. It had green leaves, red tomatoes, and yellow cheese. Tom and Sue went to the fridge. They opened the door. They saw the salad bowl. But the salad bowl was empty. There was no salad left. Tom and Sue were sad. They looked at each other. \"Who ate the salad?\" Tom asked."
+    },
+    {
+      "id": "natural_en_0168",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a wise boy called Kevin who wanted to succeed. He worked very hard and got lots of equipment to help him. Kevin was so wise, he knew exactly what to do with all the equipment. He put together lots of tiny pieces of wood and soon had three big boats. He placed the equipment in the boats and set off across the wide ocean. The wind was strong but Kevin was wise and strong"
+    },
+    {
+      "id": "natural_en_0169",
+      "category": "natural_en",
+      "text": "The sun was peeking over the trees and Peter curiously ran to the window to watch as the colours of the morning bloomed. He wondered what exciting things the day had in store for him, and he smiled his silly little smile. Arriving in the living room, he noticed something new - there was a big, beautiful fireplace. He ran over and started to touch it. His mom called him over, and said, “It looks"
+    },
+    {
+      "id": "natural_en_0170",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a small boy who was always playing a game of hide and seek. One day, he found an old radio. He looked around it and saw that it was very deep. He asked his mom why it was so deep. \"It might be hiding something,\" said Mom with a smile. The boy was excited at the thought of finding something special. He slowly opened the deep radio and found a present! He grabbed the"
+    },
+    {
+      "id": "natural_en_0171",
+      "category": "natural_en",
+      "text": "Lila and Ben were playing in the water. They liked to swim and splash and see the fish. They saw a big reef with many colors and shapes. They wanted to go closer and look. \"Let's go to the reef,\" Ben said. \"Maybe we can find a star or a shell.\" \"OK,\" Lila said. \"But we have to be careful. The reef is sharp and the water is deep.\" They swam to the reef and saw many things. They saw a star with"
+    },
+    {
+      "id": "natural_en_0172",
+      "category": "natural_en",
+      "text": "Once upon a time, there was an old tree in the forest. One day, a young bear wanted to climb the old tree. She asked the kind owl sitting on the branch, \"Can I climb the old tree?\" The kind owl said, \"Yes! Just be careful!\" The young bear slowly, carefully started to climb. She tried to grab onto all the old branches as she made her way up. Once at the top of the tree she let out a cheer! She"
+    },
+    {
+      "id": "natural_en_0173",
+      "category": "natural_en",
+      "text": "Ben was a jolly boy who liked to feed the animals at the farm. He liked to feed the cows, the pigs, the sheep and the chickens. He liked to see them eat and make noises. One day, he saw a new animal at the farm. It was big and brown and had a horn on its head. Ben was curious and wanted to feed it. He asked his mom what it was. \"That is a goat, Ben. Be careful, he can be naughty sometimes. He"
+    },
+    {
+      "id": "natural_en_0174",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a little girl called Anne. She was only three years old, but already she was brave and strong. One day, Anne was in the garden, swinging on her swing. She felt like she was flying, like a bird in the sky. Soon, Anne had forgotten all about the world around her. Suddenly, Anne looked down and saw something on the ground. It was a prune! She bent down to pick it up, and"
+    },
+    {
+      "id": "natural_en_0175",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a mule. It was a very special mule because it was deaf. One special day, the mule ran away from the farm it lived on. It ran down a long path and didn't look back. Soon after, a little boy came running down the path. He was looking for the mule. He was so sad and he couldn't find the mule anywhere. He began to yell, \"Where are you, mule?\". He yelled and yelled but the"
+    },
+    {
+      "id": "natural_en_0176",
+      "category": "natural_en",
+      "text": "Teddy was a very stubborn little boy. He had a big medal that was very special to him. Whenever he went out to play, he wouldn't take it off. One day, Teddy was playing by the riverbank. He wanted to get across the river, but it was too wide for him to jump over. He saw a bridge and started to walk over it, but then he noticed a sign that said: \"No crossing\". The sign was very stubborn and Teddy"
+    },
+    {
+      "id": "natural_en_0177",
+      "category": "natural_en",
+      "text": "Once upon a time, there lived a little girl called Annabelle. Annabelle loved to listen to stories and poems. One day, Annabelle's mom asked her if she wanted to go to the park. Annabelle was so excited and said yes. They went to the park and found a lot of other children playing. Annabelle showed them a poem that she was proud of. Everyone was very impressed and clapped for her. The children"
+    },
+    {
+      "id": "natural_en_0178",
+      "category": "natural_en",
+      "text": "Ben liked to play with his red cap. He wore it every day, even when it was hot or cold. He liked to run and jump and swing with his cap on his head. He thought his cap made him fast and strong and brave. One day, he saw a big hill near his house. He wanted to climb it and see what was on the other side. He put on his cap and ran to the hill. He did not tell his mom or dad where he was going. He"
+    },
+    {
+      "id": "natural_en_0179",
+      "category": "natural_en",
+      "text": "Lily and Ben are friends. They like to play in the snow. One day, they find a big blackboard in the yard. It is icy and cold. \"Let's draw on the blackboard with snow!\" Lily says. \"OK!\" Ben says. They make snowballs and throw them at the blackboard. They make shapes and letters and animals. But then, Lily sees a big snowman on the blackboard. She likes the snowman. She wants it for herself. \"Ben,"
+    },
+    {
+      "id": "natural_en_0180",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a little girl called Bella. Bella loved to explore and she liked finding unusual things. One day, Bella was looking around her house and she found something really unusual. It was behind the curtain in the living room. Bella said to her mummy, \"Look Mamma, I find something!\" Her mummy came over to see what Bella had found. Bella's mummy said, \"Oh my goodness, what a"
+    },
+    {
+      "id": "natural_en_0181",
+      "category": "natural_en",
+      "text": "Ben and Mia liked to play on the beach. They liked to dig in the sand and find shells and stones. One day, they found a big shell that was closed. Ben said, \"Maybe there is a pearl inside. Let's open it and see.\" They tried to open the shell, but it was too hard. They asked their dad for help. He used a knife to open the shell. Inside, there was a soft and slimy thing. It was an oyster. Ben and"
+    },
+    {
+      "id": "natural_en_0182",
+      "category": "natural_en",
+      "text": "Lily and Tom were twins who liked to play outside. One day, they saw a big mill near their house. The mill had a big wheel that turned the water. Lily and Tom wanted to see the mill closer. \"Let's go to the mill!\" Lily said. \"No, we can't. Mom said we have to stay away from the mill. It is dangerous,\" Tom said. \"But I want to see the wheel. It looks fun,\" Lily said. She ran to the mill and Tom"
+    },
+    {
+      "id": "natural_en_0183",
+      "category": "natural_en",
+      "text": "Once there was a soft earth where lots of animals lived. But, one day a big monster came and wanted to win the earth. The animals were scared and so they all ran away. The monster kept trying to win the earth and he would not give up. He grew bigger and bigger and was getting closer and closer. The animals were so scared! Finally, the monster managed to win the earth. He destroyed all of the"
+    },
+    {
+      "id": "natural_en_0184",
+      "category": "natural_en",
+      "text": "Anna and Ben are playing in the garden. They see a big hole in the fence. They are curious and enthusiastic. They want to know what is on the other side of the hole. \"Let's go and look,\" says Anna. \"OK, but be careful,\" says Ben. They crawl through the hole and find themselves in a new place. There are many flowers and trees and birds. They also see a small pond with fish and frogs. \"Wow, this is"
+    },
+    {
+      "id": "natural_en_0185",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a little girl who was very eager to show her mom her new cup. She had received it as a gift and was so excited to share it with her mom. Every day, she asked her mom if she could show her the cup, but her mom was always too busy. Finally, the girl's mom found a few minutes and said, \"okay, let me see your cup!\" The little girl grabbed her cup and proudly ran toward her"
+    },
+    {
+      "id": "natural_en_0186",
+      "category": "natural_en",
+      "text": "Once upon a time there were two friends named Karen and Sam. They were playing a game. The game was to try and see who could jump the highest. Karen said, \"I think I can jump the highest.\" Sam said, \"No, I think I can jump higher than you.\" Karen said, \"No way! Let's try it and see who can jump the highest.\" So they began to try and jump as high as they could. Sam went first and he jumped really"
+    },
+    {
+      "id": "natural_en_0187",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a little girl. She wanted to play with a hoop, so she asked her mum if she could get one. Her mum said it was a great idea, and so she went to buy the hoop for the girl. The little girl was so excited when the hoop arrived. She couldn't wait to try it out! She put it down on the ground and started spinning it around. Suddenly, the hoop started to wobble and then it"
+    },
+    {
+      "id": "natural_en_0188",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a little girl who loved to peek. She loved to peek out of windows, peek around corners, and peek in cupboards. But her favorite thing to peek at was her crib. One day, the little girl peeked into her crib and saw a silly surprise! There was a stuffed piggy with a silly hat and a silly bow-tie. The little girl giggled and peeked deeper into the crib. She saw a silly"
+    },
+    {
+      "id": "natural_en_0189",
+      "category": "natural_en",
+      "text": "Once there was a boy called Charlie. Charlie wanted to pay for a pumpkin for his family. So he went to the store to get one. He saw that there were many pumpkins to choose from. They were all very different sizes and colors. “Which one should I get?” Charlie asked the storekeeper. The storekeeper smiled and said “Why don't you get the original pumpkin?” Charlie was delighted! He wanted the"
+    },
+    {
+      "id": "natural_en_0190",
+      "category": "natural_en",
+      "text": "One day, there was a little girl named Amy. She was three years old and very curious. She was playing in her garden when she noticed a curious little plant. She examined it closely with her big, blue eyes. Suddenly, Amy noticed it had little mint leaves on it. She was so excited. She put her nose up close to the leaves and took a deep breath. The smell was so fresh! Just then, Amy noticed a busy"
+    },
+    {
+      "id": "natural_en_0191",
+      "category": "natural_en",
+      "text": "Once there was a boy named Pat who liked to play outside. Every day he would take a pole out with him and swing it around his head in the air. He had so much energy, it was amazing! One day, Pat's best friend, Amy, came over to play. She saw Pat swinging his pole around and thought it looked fun. \"I want to do that, too!\" exclaimed Amy. Pat just smiled and showed her how to do it. She tried and"
+    },
+    {
+      "id": "natural_en_0192",
+      "category": "natural_en",
+      "text": "Tommy was a little boy who liked to play with his toys. He had a lot of cars and trucks and trains that he could make noises with. He also had a big teddy bear that he hugged when he was sleepy. One day, Tommy's mommy had to go to work. She was a lawyer, which meant she talked to people and helped them with problems. She told Tommy to be good and listen to the babysitter, who was a nice lady"
+    },
+    {
+      "id": "natural_en_0193",
+      "category": "natural_en",
+      "text": "Once upon a time there was a very naughty puppy called Daisy. She liked to do naughty things like chewing furniture and running away on adventures. One day, Daisy decided to go on an adventure in the living room. She saw a comfy chair and felt she just had to have it. So, Daisy started to raise the chair with her paws and teeth. She raised it high in the air and proudly walked away with it. But"
+    },
+    {
+      "id": "natural_en_0194",
+      "category": "natural_en",
+      "text": "Tim and Mia liked to play with their blocks. They had many blocks of different colors and shapes. They could build towers and bridges and houses with their blocks. Sometimes they counted their blocks to see who had more. One day, they decided to build a big castle with all their blocks. They worked hard and helped each other. They used the heavy blocks for the walls and the light blocks for the"
+    },
+    {
+      "id": "natural_en_0195",
+      "category": "natural_en",
+      "text": "Once upon a time, there was a man and a woman who loved each other very much. They had a happy home with a cat and a dog. One day, while they were out shopping, they didn't know that someone had become a thief and taken their things. When the man and the woman came home, they were very shocked to see that their things were gone. They were sad and angry too. The man said, \"We have to be hard on"
+    },
+    {
+      "id": "natural_en_0196",
+      "category": "natural_en",
+      "text": "Once there was a gray cat and a gray mouse. The mouse wanted to borrow some money, so he asked the cat. The cat said yes, and gave him some money. The mouse said thank you, and ran away to spend the money. The next day, the mouse decided to give the cat his money back. He put it all in a small pouch, and ran to the cat's house. When the cat saw the pouch he opened it and there was all his money."
+    },
+    {
+      "id": "natural_en_0197",
+      "category": "natural_en",
+      "text": "Lila had a small rat as a pet. She liked to rub his fur and feed him cheese. She named him Remy and kept him in a cage in her room. One day, Lila's mom said, \"We have to go to the store, Lila. Do you want to come with me?\" Lila nodded and said, \"Yes, mom. Can I bring Remy?\" Mom smiled and said, \"Sure, but you have to hold him tight and not let him run away.\" Lila put Remy in her pocket and went"
+    },
+    {
+      "id": "natural_en_0198",
+      "category": "natural_en",
+      "text": "Tom and Anna liked to go to the museum with their mom. They saw many things there, like big bones, old pots, and shiny rocks. They also liked to play in the museum store, where they could touch and try different toys and books. One day, they went to the museum and saw a new thing. It was a big red train with wheels and a horn. Tom and Anna wanted to play with it, but it was not in the store. It"
+    },
+    {
+      "id": "natural_en_0199",
+      "category": "natural_en",
+      "text": "Jenny was an eager little girl who LOVED candles. Whenever she saw a candle, she was always so happy and used to clap and squeal. As she got older, she was very excited to help with the candles for the special holidays like Easter. On Easter day, Jenny looked around her house and noticed that all the candles were lit. She was surprised and asked her mom why there were so many candles. Her mom"
+    },
+    {
+      "id": "natural_en_0200",
+      "category": "natural_en",
+      "text": "Tom and Lily liked to play with blocks. They had many blocks of different colors and shapes. They wanted to build a big tower with their blocks. They took turns to put one block on top of another. \"Look, our tower is so high!\" Lily said. She was happy. \"Yes, it is!\" Tom said. He was happy too. He wanted to put another block on the tower. He looked for a block in the box. But there were no more"
+    },
+    {
+      "id": "other_lang_0001",
+      "category": "other_lang",
+      "text": "El clima está soleado y la gente camina por el parque."
+    },
+    {
+      "id": "other_lang_0002",
+      "category": "other_lang",
+      "text": "No encontré las llaves encima de la mesa esta mañana."
+    },
+    {
+      "id": "other_lang_0003",
+      "category": "other_lang",
+      "text": "La biblioteca cierra temprano los viernes por la tarde."
+    },
+    {
+      "id": "other_lang_0004",
+      "category": "other_lang",
+      "text": "¿Puedes ayudarme a traducir esta frase al inglés?"
+    },
+    {
+      "id": "other_lang_0005",
+      "category": "other_lang",
+      "text": "Mañana viajamos a la costa si no llueve demasiado."
+    },
+    {
+      "id": "other_lang_0006",
+      "category": "other_lang",
+      "text": "Le café du matin sentait le pain chaud et le beurre."
+    },
+    {
+      "id": "other_lang_0007",
+      "category": "other_lang",
+      "text": "Nous avons pris le train pour arriver avant midi."
+    },
+    {
+      "id": "other_lang_0008",
+      "category": "other_lang",
+      "text": "Peux-tu m'expliquer comment fonctionne ce logiciel ?"
+    },
+    {
+      "id": "other_lang_0009",
+      "category": "other_lang",
+      "text": "La réunion a été reportée à jeudi prochain."
+    },
+    {
+      "id": "other_lang_0010",
+      "category": "other_lang",
+      "text": "Il pleuvait encore quand nous sommes sortis du cinéma."
+    },
+    {
+      "id": "other_lang_0011",
+      "category": "other_lang",
+      "text": "Der Zug kommt pünktlich auf Gleis drei an."
+    },
+    {
+      "id": "other_lang_0012",
+      "category": "other_lang",
+      "text": "Kannst du mir bitte die Adresse noch einmal schicken?"
+    },
+    {
+      "id": "other_lang_0013",
+      "category": "other_lang",
+      "text": "Heute Abend kochen wir gemeinsam eine einfache Suppe."
+    },
+    {
+      "id": "other_lang_0014",
+      "category": "other_lang",
+      "text": "Die Bibliothek ist am Sonntag geschlossen."
+    },
+    {
+      "id": "other_lang_0015",
+      "category": "other_lang",
+      "text": "Nach dem Regen glänzten die Straßen im Sonnenlicht."
+    },
+    {
+      "id": "other_lang_0016",
+      "category": "other_lang",
+      "text": "Oggi il mercato è pieno di frutta fresca e verdure."
+    },
+    {
+      "id": "other_lang_0017",
+      "category": "other_lang",
+      "text": "Non riesco a trovare il mio biglietto del treno."
+    },
+    {
+      "id": "other_lang_0018",
+      "category": "other_lang",
+      "text": "Domani visitiamo il museo se fa bel tempo."
+    },
+    {
+      "id": "other_lang_0019",
+      "category": "other_lang",
+      "text": "La pasta era deliziosa e il servizio molto gentile."
+    },
+    {
+      "id": "other_lang_0020",
+      "category": "other_lang",
+      "text": "Puoi ripetere lentamente quella frase, per favore?"
+    },
+    {
+      "id": "other_lang_0021",
+      "category": "other_lang",
+      "text": "Hoje de manhã o café ficou pronto mais cedo."
+    },
+    {
+      "id": "other_lang_0022",
+      "category": "other_lang",
+      "text": "Não encontrei o arquivo que você mencionou ontem."
+    },
+    {
+      "id": "other_lang_0023",
+      "category": "other_lang",
+      "text": "Vamos caminhar na praia antes do pôr do sol."
+    },
+    {
+      "id": "other_lang_0024",
+      "category": "other_lang",
+      "text": "A reunião foi cancelada por causa da chuva forte."
+    },
+    {
+      "id": "other_lang_0025",
+      "category": "other_lang",
+      "text": "Você pode me ajudar com esta tradução curta?"
+    },
+    {
+      "id": "other_lang_0026",
+      "category": "other_lang",
+      "text": "今天的天气很好，我们去公园散步吧。"
+    },
+    {
+      "id": "other_lang_0027",
+      "category": "other_lang",
+      "text": "我把钥匙放在桌子上，但现在找不到了。"
+    },
+    {
+      "id": "other_lang_0028",
+      "category": "other_lang",
+      "text": "请问去火车站怎么走？"
+    },
+    {
+      "id": "other_lang_0029",
+      "category": "other_lang",
+      "text": "这本书很有意思，我想再读一遍。"
+    },
+    {
+      "id": "other_lang_0030",
+      "category": "other_lang",
+      "text": "晚饭后我们一起看了一部电影。"
+    },
+    {
+      "id": "other_lang_0031",
+      "category": "other_lang",
+      "text": "今日は天気が良いので散歩に行きましょう。"
+    },
+    {
+      "id": "other_lang_0032",
+      "category": "other_lang",
+      "text": "鍵をテーブルの上に置いたはずなのに見つからない。"
+    },
+    {
+      "id": "other_lang_0033",
+      "category": "other_lang",
+      "text": "駅までの行き方を教えてください。"
+    },
+    {
+      "id": "other_lang_0034",
+      "category": "other_lang",
+      "text": "この本は面白くて、もう一度読みたいです。"
+    },
+    {
+      "id": "other_lang_0035",
+      "category": "other_lang",
+      "text": "夕食のあとで短い映画を見ました。"
+    },
+    {
+      "id": "other_lang_0036",
+      "category": "other_lang",
+      "text": "Сегодня солнечно, и мы гуляем в парке."
+    },
+    {
+      "id": "other_lang_0037",
+      "category": "other_lang",
+      "text": "Я не могу найти ключи, которые оставил на столе."
+    },
+    {
+      "id": "other_lang_0038",
+      "category": "other_lang",
+      "text": "Можешь помочь перевести это короткое предложение?"
+    },
+    {
+      "id": "other_lang_0039",
+      "category": "other_lang",
+      "text": "Поезд прибывает на третий путь вовремя."
+    },
+    {
+      "id": "other_lang_0040",
+      "category": "other_lang",
+      "text": "После дождя улицы блестели на солнце."
+    },
+    {
+      "id": "weird_clean_0001",
+      "category": "weird_clean",
+      "text": "https://example.com/docs/api/v2/activations?layer=4&pos=-1"
+    },
+    {
+      "id": "weird_clean_0002",
+      "category": "weird_clean",
+      "text": "https://arxiv.org/abs/2604.09839"
+    },
+    {
+      "id": "weird_clean_0003",
+      "category": "weird_clean",
+      "text": "{\"ok\": true, \"n\": 3, \"items\": [\"a\", \"b\", \"c\"]}"
+    },
+    {
+      "id": "weird_clean_0004",
+      "category": "weird_clean",
+      "text": "{\"error\": null, \"latency_ms\": 12.5, \"model\": \"pythia-70m\"}"
+    },
+    {
+      "id": "weird_clean_0005",
+      "category": "weird_clean",
+      "text": "[1, 2, 3, 5, 8, 13, 21, 34]"
+    },
+    {
+      "id": "weird_clean_0006",
+      "category": "weird_clean",
+      "text": "{\"user\": {\"id\": 7, \"tags\": [\"dev\", \"audit\"]}}"
+    },
+    {
+      "id": "weird_clean_0007",
+      "category": "weird_clean",
+      "text": "<html><body><h1>Report</h1><p>status=ok</p></body></html>"
+    },
+    {
+      "id": "weird_clean_0008",
+      "category": "weird_clean",
+      "text": "<div class=\"card\" data-id=\"42\">hello</div>"
+    },
+    {
+      "id": "weird_clean_0009",
+      "category": "weird_clean",
+      "text": "SELECT 1; -- not executed, just text"
+    },
+    {
+      "id": "weird_clean_0010",
+      "category": "weird_clean",
+      "text": "f(x) = ax^2 + bx + c, discriminant = b^2 - 4ac"
+    },
+    {
+      "id": "weird_clean_0011",
+      "category": "weird_clean",
+      "text": "∫_0^1 x^2 dx = 1/3"
+    },
+    {
+      "id": "weird_clean_0012",
+      "category": "weird_clean",
+      "text": "∇·E = ρ/ε₀"
+    },
+    {
+      "id": "weird_clean_0013",
+      "category": "weird_clean",
+      "text": "E = mc^2 ; p = ħk"
+    },
+    {
+      "id": "weird_clean_0014",
+      "category": "weird_clean",
+      "text": "O(n log n) vs O(n^2) for n=10^6"
+    },
+    {
+      "id": "weird_clean_0015",
+      "category": "weird_clean",
+      "text": "uuid: 550e8400-e29b-41d4-a716-446655440000"
+    },
+    {
+      "id": "weird_clean_0016",
+      "category": "weird_clean",
+      "text": "sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "weird_clean_0017",
+      "category": "weird_clean",
+      "text": "mailto:audit@example.org?subject=trajectory-bank"
+    },
+    {
+      "id": "weird_clean_0018",
+      "category": "weird_clean",
+      "text": "ftp://files.example.net/pub/readme.txt"
+    },
+    {
+      "id": "weird_clean_0019",
+      "category": "weird_clean",
+      "text": "GET /v1/health HTTP/1.1\nHost: api.example.com"
+    },
+    {
+      "id": "weird_clean_0020",
+      "category": "weird_clean",
+      "text": "HTTP/1.1 200 OK\nContent-Type: application/json"
+    },
+    {
+      "id": "weird_clean_0021",
+      "category": "weird_clean",
+      "text": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\n-----END PUBLIC KEY-----"
+    },
+    {
+      "id": "weird_clean_0022",
+      "category": "weird_clean",
+      "text": "price=$12.50; tax=8%; total=$13.50"
+    },
+    {
+      "id": "weird_clean_0023",
+      "category": "weird_clean",
+      "text": "lat=37.7749, lon=-122.4194, zoom=12"
+    },
+    {
+      "id": "weird_clean_0024",
+      "category": "weird_clean",
+      "text": "RGB(34, 139, 34) / #228B22"
+    },
+    {
+      "id": "weird_clean_0025",
+      "category": "weird_clean",
+      "text": "cron: 0 3 * * * /usr/local/bin/backup.sh"
+    },
+    {
+      "id": "weird_clean_0026",
+      "category": "weird_clean",
+      "text": "PATH=/usr/local/bin:/usr/bin:/bin"
+    },
+    {
+      "id": "weird_clean_0027",
+      "category": "weird_clean",
+      "text": "C:\\Users\\Public\\Documents\\notes.txt"
+    },
+    {
+      "id": "weird_clean_0028",
+      "category": "weird_clean",
+      "text": "/usr/local/var/log/app/error.log"
+    },
+    {
+      "id": "weird_clean_0029",
+      "category": "weird_clean",
+      "text": "emacs vs vim: :wq and C-x C-s"
+    },
+    {
+      "id": "weird_clean_0030",
+      "category": "weird_clean",
+      "text": "lorem ipsum dolor sit amet, consectetur adipiscing elit"
+    },
+    {
+      "id": "weird_clean_0031",
+      "category": "weird_clean",
+      "text": "NaN Infinity -0 +0 1e-9 3.1415926535"
+    },
+    {
+      "id": "weird_clean_0032",
+      "category": "weird_clean",
+      "text": "∑_{i=1}^{n} i = n(n+1)/2"
+    },
+    {
+      "id": "weird_clean_0033",
+      "category": "weird_clean",
+      "text": "A ∧ B ⇒ C ; ¬(A ∨ B) ≡ ¬A ∧ ¬B"
+    },
+    {
+      "id": "weird_clean_0034",
+      "category": "weird_clean",
+      "text": "𐍈 odd unicode still clean text ✨"
+    },
+    {
+      "id": "weird_clean_0035",
+      "category": "weird_clean",
+      "text": "café naïve résumé — accents only"
+    },
+    {
+      "id": "weird_clean_0036",
+      "category": "weird_clean",
+      "text": "mixED Case AND   irregular   spacing!!!"
+    },
+    {
+      "id": "weird_clean_0037",
+      "category": "weird_clean",
+      "text": "((())){{{}}}[[[]]]<<<>>>"
+    },
+    {
+      "id": "weird_clean_0038",
+      "category": "weird_clean",
+      "text": "a,b,c\n1,2,3\n4,5,6"
+    },
+    {
+      "id": "weird_clean_0039",
+      "category": "weird_clean",
+      "text": "YAML:\n  name: bank\n  count: 50"
+    },
+    {
+      "id": "weird_clean_0040",
+      "category": "weird_clean",
+      "text": "regex: ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$"
+    },
+    {
+      "id": "weird_clean_0041",
+      "category": "weird_clean",
+      "text": "diff --git a/x.py b/x.py\n+print('ok')"
+    },
+    {
+      "id": "weird_clean_0042",
+      "category": "weird_clean",
+      "text": "TODO(trist): dump all layers, all positions"
+    },
+    {
+      "id": "weird_clean_0043",
+      "category": "weird_clean",
+      "text": "NOTE: unsteered OOD for false-positive rate"
+    },
+    {
+      "id": "weird_clean_0044",
+      "category": "weird_clean",
+      "text": "version=1 seed=0 category=weird_clean"
+    },
+    {
+      "id": "weird_clean_0045",
+      "category": "weird_clean",
+      "text": "π ≈ 3.14159… e ≈ 2.71828… φ ≈ 1.61803…"
+    },
+    {
+      "id": "weird_clean_0046",
+      "category": "weird_clean",
+      "text": "km/h → m/s : divide by 3.6"
+    },
+    {
+      "id": "weird_clean_0047",
+      "category": "weird_clean",
+      "text": "Q1 revenue: $1.2M (±0.1M)"
+    },
+    {
+      "id": "weird_clean_0048",
+      "category": "weird_clean",
+      "text": "ticket #4821 status=open assignee=null"
+    },
+    {
+      "id": "weird_clean_0049",
+      "category": "weird_clean",
+      "text": "graph: A->B->C; A->D; D->C"
+    },
+    {
+      "id": "weird_clean_0050",
+      "category": "weird_clean",
+      "text": "null undefined None nil NaN void(0)"
+    }
+  ]
+}
