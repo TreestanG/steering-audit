@@ -7,7 +7,6 @@ import torch
 import utils
 from utils import get_decoder_layers, get_token_activations, load_model
 
-
 def load_pairs(path):
     with open(path) as f:
         data = json.load(f)
@@ -26,9 +25,9 @@ def build_steering_vectors(pairs, layers=None):
     residuals = {layer: [] for layer in layers}
 
     for prompt_pos, prompt_neg in pairs:
-        acts = get_token_activations([prompt_pos, prompt_neg])
+        acts, _ = get_token_activations([prompt_pos, prompt_neg])
         for layer in layers:
-            act_pos, act_neg = acts[layer][0], acts[layer][1]
+            act_pos, act_neg = acts[layer, 0], acts[layer, 1]
             differences[layer].append(act_pos - act_neg)
             residuals[layer].append(act_pos)
             residuals[layer].append(act_neg)
@@ -63,7 +62,7 @@ def make_add_vector_hook(direction, scale, fraction):
 
 def make_random_vector_hook(scale, fraction):
     np.random.seed(42)
-    v = torch.from_numpy(np.random.randn(utils.model.config.hidden_size)).float()
+    v = torch.from_numpy(np.random.randn(model.config.hidden_size)).float()
 
     def add_random_vector(module, input, output):
         delta = fraction * scale * v / v.norm()
@@ -73,6 +72,8 @@ def make_random_vector_hook(scale, fraction):
 
 
 def last_token_logits(prompt):
+
+    assert utils.model is not None and utils.tokenizer is not None
     inputs = utils.tokenizer(prompt, return_tensors="pt")
     with torch.no_grad():
         outputs = utils.model(**inputs)
@@ -80,6 +81,7 @@ def last_token_logits(prompt):
 
 
 def token_id(word):
+    assert utils.tokenizer is not None
     return utils.tokenizer.encode(word)[-1]
 
 
@@ -107,7 +109,8 @@ def main():
     parser.add_argument("--word_neg", type=str, default=" sad")
     args = parser.parse_args()
 
-    load_model(args.model_name)
+    global model, tokenizer
+    model, tokenizer = load_model(args.model_name)
 
     train_pairs = load_pairs(args.train_path)
     test_pairs = load_pairs(args.test_path)

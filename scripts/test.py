@@ -7,8 +7,6 @@ prompts = [
     "The food was terrible and I felt",
 ]
 
-activations = get_token_activations(prompts, 3, last_only=False)
+activations, mask = get_token_activations(prompts, 3, last_only=False)
+print(activations.shape, mask.shape)
 print(activations)
-
-for i in activations:
-    print(i.shape)

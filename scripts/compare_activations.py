@@ -9,20 +9,18 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from utils import get_token_activations, load_model
-import utils
-
 
 def load_comparisons(path):
     with open(path) as f:
         return json.load(f)
 
 
-def cosine_similarity_by_layer(prompt1, prompt2, verbose=False):
-    acts1 = get_token_activations(prompt1, last_only=True)
-    acts2 = get_token_activations(prompt2, last_only=True)
+def cosine_similarity_by_layer(prompt1, prompt2, verbose=False) -> list[float]:
+    acts1, _ = get_token_activations([prompt1], last_only=True)
+    acts2, _ = get_token_activations([prompt2], last_only=True)
 
     similarities = []
-    for i, (act1, act2) in enumerate(zip(acts1, acts2)):
+    for i, (act1, act2) in enumerate(zip(acts1[:, 0], acts2[:, 0])):
         sim = F.cosine_similarity(act1.float(), act2.float(), dim=0).item()
         if verbose:
             print(f"Layer {i}. Similarity: {sim}")
@@ -65,10 +63,10 @@ def main():
     parser.add_argument("--results_dir", type=str, default="results")
     args = parser.parse_args()
 
-    load_model(args.model_name)
+    model, _ = load_model(args.model_name)
     data = load_comparisons(args.data_path)
 
-    n_layers = utils.model.config.num_hidden_layers + 1  # embed + after each block
+    n_layers = model.config.num_hidden_layers + 1  # embed + after each block
     model_dir = args.model_name.replace("/", "_")
     graph_path = Path(args.results_dir) / model_dir / "final_token_average_similarity.png"
 
