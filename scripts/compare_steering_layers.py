@@ -17,6 +17,7 @@ ATOL = 1e-5
 
 
 def layer_output(prompt, layer, hook_fn=None):
+    assert utils.model is not None and utils.tokenizer is not None
     captured = {}
 
     def capture(module, input, output):
