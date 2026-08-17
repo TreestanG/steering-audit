@@ -2,13 +2,14 @@ from typing import cast
 
 import torch
 from transformers import (
-    AutoModelForCausalLM, 
-    AutoTokenizer, 
-    PreTrainedModel, 
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    PreTrainedModel,
     PreTrainedTokenizerBase,
     GPT2LMHeadModel,
     GPTNeoXForCausalLM,
     LlamaForCausalLM,
+    Qwen2ForCausalLM,
 )
 
 model: PreTrainedModel | None = None
@@ -37,7 +38,7 @@ def get_decoder_layers() -> torch.nn.ModuleList:
         raise RuntimeError("Call load_model(...) before get_decoder_layers()")
     if isinstance(model, GPTNeoXForCausalLM):
         return model.gpt_neox.layers  # Pythia / GPT-NeoX
-    if isinstance(model, LlamaForCausalLM):
+    if isinstance(model, (LlamaForCausalLM, Qwen2ForCausalLM)):
         return model.model.layers  # Llama, Qwen2, Mistral, Gemma, ...
     if isinstance(model, GPT2LMHeadModel):
         return model.transformer.h  # GPT-2
