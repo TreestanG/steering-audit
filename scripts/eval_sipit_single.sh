@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+# Run src/sipit.py over the trajectory-bank activations and tally exact recovery.
+#
+# File selection (this script; not forwarded):
+#   --act_dir DIR     default: data/activations/Qwen_Qwen2.5-0.5B-Instruct
+#   --category NAME   repeatable (base64 code other_lang natural_en weird_clean)
+#   --ids ID          repeatable, or comma-separated
+#   --limit N
+#   --out PATH        default: results/sipit.jsonl (single-layer)
+#   --out_dir DIR     with --all_layers: sipit_layer_XX.jsonl per layer
+#
+# Forwarded to sipit.py:
+#   --model_name NAME     default: Qwen/Qwen2.5-0.5B-Instruct
+#   --vocab_path PATH     default: data/activations/Qwen_Qwen2.5-0.5B-Instruct/vocab/vocab_table.pt
+#   --layer N             default: 12
+#   --all_layers          sweep every hidden-state layer in the activation tensor
+#   --tol FLOAT           default: 1e-2
+#   --schedule A,B,...    default: 32,96,384,1536,6144,24576
+#   --max_len N           default: 0 (whole sequence)
+#   --noise FLOAT         default: 0.0
+#   --exhaustive          scan all |V| per position
+#   --no_stop_on_fail
+#   --data_path PATH      default: data/trajectory_bank_prompts.json
+#
+# --act_path is chosen by this script from --act_dir / --ids / --category / --limit.
+#
+# Examples:
+#   scripts/eval_sipit.sh
+#   scripts/eval_sipit.sh --category code --limit 5
+#   scripts/eval_sipit.sh --ids code_0001,base64_0001 --layer 12 --max_len 8
+#   scripts/eval_sipit.sh --out results/sipit_code.jsonl --category code --schedule 32,96,384
+#   scripts/eval_sipit.sh --ids code_0001 --all_layers --out_dir results/Qwen_Qwen2.5-0.5B-Instruct/layers
+
+set -u
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+cd "$ROOT"
+
+ACT_DIR=data/activations/Qwen_Qwen2.5-0.5B-Instruct
+OUT=results/sipit.jsonl
+OUT_SET=0
+OUT_DIR=
+ALL_LAYERS=0
+LIMIT=0
+CATEGORIES=()
+IDS=()
+SIPIT_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --act_dir)
+            ACT_DIR=$2
+            shift 2
+            ;;
+        --category)
+            CATEGORIES+=("$2")
+            shift 2
+            ;;
+        --ids)
+            IFS=',' read -r -a parsed <<< "$2"
+            # bash 3.2 + set -u: "${arr[@]}" is "unbound" when arr is empty.
+            IDS+=(${parsed[@]+"${parsed[@]}"})
+            shift 2
+            ;;
+        --limit)
+            LIMIT=$2
+            shift 2
+            ;;
+        --out)
+            OUT=$2
+            OUT_SET=1
+            shift 2
+            ;;
+        --out_dir)
+            OUT_DIR=$2
+            shift 2
+            ;;
+        --all_layers)
+            ALL_LAYERS=1
+            shift
+            ;;
+        --act_path)
+            echo "eval_sipit.sh picks --act_path; use --ids / --category / --limit" >&2
+            exit 1
+            ;;
+        -h | --help)
+            sed -n '2,33p' "$0"
+            echo
+            uv run src/sipit.py -h
+            exit 0
+            ;;
+        *)
+            SIPIT_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+files=()
+for f in "$ACT_DIR"/*.pt; do
+    [[ -e $f ]] || continue
+    id=$(basename "$f" .pt)
+
+    if [[ ${#IDS[@]} -gt 0 ]]; then
+        keep=0
+        for want in "${IDS[@]}"; do
+            [[ $id == "$want" ]] && keep=1 && break
+        done
+        [[ $keep -eq 1 ]] || continue
+    fi
+
+    if [[ ${#CATEGORIES[@]} -gt 0 ]]; then
+        keep=0
+        for cat in "${CATEGORIES[@]}"; do
+            [[ $id == "${cat}_"* ]] && keep=1 && break
+        done
+        [[ $keep -eq 1 ]] || continue
+    fi
+
+    files+=("$f")
+    if [[ $LIMIT -gt 0 && ${#files[@]} -ge $LIMIT ]]; then
+        break
+    fi
+done
+
+if [[ ${#files[@]} -eq 0 ]]; then
+    echo "no activation files matched in $ACT_DIR" >&2
+    exit 1
+fi
+
+# bash 3.2 + set -u treats "${arr[@]}" as unbound when arr is empty.
+if [[ $ALL_LAYERS -eq 1 ]]; then
+    if [[ $OUT_SET -eq 1 ]]; then
+        echo "eval_sipit.sh: --all_layers writes per-layer jsonl; use --out_dir, not --out" >&2
+        exit 1
+    fi
+    extra=(--all_layers)
+    [[ -n $OUT_DIR ]] && extra+=(--out_dir "$OUT_DIR")
+    echo "running SipIt on ${#files[@]} prompts, all layers${OUT_DIR:+ -> $OUT_DIR}"
+    uv run src/sipit.py --act_path "${files[@]}" "${extra[@]}" ${SIPIT_ARGS[@]+"${SIPIT_ARGS[@]}"}
+else
+    if [[ -n $OUT_DIR ]]; then
+        echo "eval_sipit.sh: --out_dir requires --all_layers" >&2
+        exit 1
+    fi
+    echo "running SipIt on ${#files[@]} prompts -> $OUT"
+    uv run src/sipit.py --act_path "${files[@]}" --out "$OUT" ${SIPIT_ARGS[@]+"${SIPIT_ARGS[@]}"}
+fi
