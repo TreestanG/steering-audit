@@ -15,5 +15,5 @@ dependencies = [
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
-analyzeUnannotatedFunctions = false
+analyzeUnannotatedFunctions = true
 reportMissingTypeStubs = false
