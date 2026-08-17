@@ -1,5 +1,6 @@
 import json
 import argparse
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -107,6 +108,7 @@ def main():
     parser.add_argument("--fraction", type=float, default=0.1)
     parser.add_argument("--word_pos", type=str, default=" happy")
     parser.add_argument("--word_neg", type=str, default=" sad")
+    parser.add_argument("--out", type=Path, default=Path("results/sentiment_gaps.json"))
     args = parser.parse_args()
 
     global model, tokenizer
@@ -116,6 +118,7 @@ def main():
     test_pairs = load_pairs(args.test_path)
 
     steering = build_steering_vectors(train_pairs)
+    layers_out = []
     for i, (direction, mean_residual_norm) in steering.items():
         hook_fn = make_add_vector_hook(direction, mean_residual_norm, args.fraction)
         random_hook_fn = make_random_vector_hook(mean_residual_norm, args.fraction)
@@ -132,9 +135,29 @@ def main():
             differences.append(steered_gap - base_gap)
             random_differences.append(steered_gap_rand - base_gap_rand)
 
-        print("Steered gap mean: ", torch.stack(differences).mean())
-        print("Random gap mean: ", torch.stack(random_differences).mean())
+        steered_mean = torch.stack(differences).mean().item()
+        random_mean = torch.stack(random_differences).mean().item()
+        print(f"layer {i}  Steered gap mean: {steered_mean}")
+        print(f"layer {i}  Random gap mean: {random_mean}")
         print("--------------------------------")
+        layers_out.append(
+            {
+                "layer": i,
+                "steered_gap_mean": steered_mean,
+                "random_gap_mean": random_mean,
+            }
+        )
+
+    payload = {
+        "model_name": args.model_name,
+        "fraction": args.fraction,
+        "word_pos": args.word_pos,
+        "word_neg": args.word_neg,
+        "layers": layers_out,
+    }
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(payload, indent=2) + "\n")
+    print(f"wrote {args.out}")
 
 
 if __name__ == "__main__":
