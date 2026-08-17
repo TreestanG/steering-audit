@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 import sys
 
@@ -8,12 +9,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import utils
 from sentiment_dir import build_steering_vectors, load_pairs, make_add_vector_hook
 from utils import get_decoder_layers, load_model
-
-TRAIN_PATH = "data/sentiment_opposites_train.json"
-TEST_PROMPT = "The movie was terrible and I felt"
-MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
-FRACTION = 0.1
-ATOL = 1e-5
 
 
 def layer_output(prompt, layer, hook_fn=None):
@@ -46,20 +41,38 @@ def expected_add(direction, scale, fraction):
 
 
 def main():
-    load_model(MODEL_NAME)
-    train_pairs = load_pairs(TRAIN_PATH)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
+    parser.add_argument("--train_path", type=str, default="data/sentiment_opposites_train.json")
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        default="The movie was terrible and I felt",
+        help="prompt whose last-token hidden state is compared steered vs base",
+    )
+    parser.add_argument("--fraction", type=float, default=0.1)
+    parser.add_argument(
+        "--atol",
+        type=float,
+        default=1e-5,
+        help="absolute L2 tolerance for steered − base vs the added vector",
+    )
+    args = parser.parse_args()
+
+    load_model(args.model_name)
+    train_pairs = load_pairs(args.train_path)
     steering = build_steering_vectors(train_pairs)
     all_ok = True
 
     for layer, (direction, scale) in steering.items():
-        hook_fn = make_add_vector_hook(direction, scale, FRACTION)
-        delta_expected = expected_add(direction, scale, FRACTION)
+        hook_fn = make_add_vector_hook(direction, scale, args.fraction)
+        delta_expected = expected_add(direction, scale, args.fraction)
 
-        base = layer_output(TEST_PROMPT, layer)
-        steered = layer_output(TEST_PROMPT, layer, hook_fn=hook_fn)
+        base = layer_output(args.prompt, layer)
+        steered = layer_output(args.prompt, layer, hook_fn=hook_fn)
         delta = steered - base
 
-        ok = torch.allclose(delta, delta_expected, atol=ATOL, rtol=0)
+        ok = torch.allclose(delta, delta_expected, atol=args.atol, rtol=0)
         max_err = (delta - delta_expected).abs().max().item()
         all_ok &= ok
         status = "OK" if ok else "FAIL"
