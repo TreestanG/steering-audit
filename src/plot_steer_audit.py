@@ -6,7 +6,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from paths import experiment_dir, figures_dir
+from paths import logs_dir, experiment_dir, figures_dir
+from log import add_logging_args, get_logger
+from log import setup as log_setup
 from plot_common import (
     THM_BOUND,
     C_GAP,
@@ -20,6 +22,9 @@ from plot_common import (
     stat,
     style_layer_axis,
 )
+
+
+logger = get_logger(__name__)
 
 
 def _line(ax, xs, band_stat, color, label, ls="-", band=True):
@@ -126,7 +131,9 @@ def main() -> None:
                    help="default: results/<slug>/steer/figures/audit.png")
     p.add_argument("--rel_tol", type=float, default=1e-3,
                    help="detection floor the audit ran with (for the headroom panel)")
+    add_logging_args(p)
     args = p.parse_args()
+    log_setup(args, default_log=logs_dir(args.model_name) / "plot_audit.log")
 
     inp = Path(args.inp) if args.inp else experiment_dir(args.model_name, "steer") / "audit.jsonl"
     out = Path(args.out) if args.out else figures_dir(args.model_name, "steer") / "audit.png"

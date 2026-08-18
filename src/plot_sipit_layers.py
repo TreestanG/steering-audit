@@ -7,12 +7,17 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from paths import experiment_dir, figures_dir
+from paths import logs_dir, experiment_dir, figures_dir
+from log import add_logging_args, get_logger
+from log import setup as log_setup
 from plot_common import THM_BOUND, load_rows, save_fig, style_layer_axis, xy
 
 # Older files store only tol, and tol = rel_tol * ‖h‖ (see sipit.match_tol),
 # so ‖h‖ = tol / rel_tol for anything predating the per-step h_norm field.
 DEFAULT_REL_TOL = 1e-3
+
+
+logger = get_logger(__name__)
 
 
 def _finite(values: list[float]) -> list[float]:
@@ -329,22 +334,24 @@ def main() -> None:
         "h_norm field, where ‖h‖ = tol / rel_tol; wrong values rescale the gap/‖h‖ "
         "panel but not its shape. Ignored once h_norm is present.",
     )
+    add_logging_args(parser)
     args = parser.parse_args()
+    log_setup(args, default_log=logs_dir(args.model_name) / "layer_metrics.log")
 
     in_dir = Path(args.in_dir) if args.in_dir else experiment_dir(args.model_name, "sipit") / "layers"
     out = Path(args.out) if args.out else figures_dir(args.model_name, "sipit") / "layer_metrics.png"
     summaries = summarize(in_dir, rel_tol=args.rel_tol)
     plot_metrics(summaries, out)
 
-    print(
-        f"\n{'L':>3}{'n':>4}{'exact':>8}{'med_res/gap':>13}{'worst':>11}"
+    logger.info(
+        f"{'L':>3}{'n':>4}{'exact':>8}{'med_res/gap':>13}{'worst':>11}"
         f"{'gap/|h|':>10}{'med_tried':>11}{'med_s':>8}"
     )
     for s in summaries:
         ex = f"{s['exact_frac'] * 100:.0f}%" if s["exact_frac"] is not None else "-"
         r50, rmax, tried50 = s["ratio"]["p50"], s["ratio"]["max"], s["tried"]["p50"]
         sep50 = s["sep"]["p50"]
-        print(
+        logger.info(
             f"{s['layer']:>3}{s['n']:>4}{ex:>8}"
             f"{(f'{r50:.2e}' if r50 is not None else '-'):>13}"
             f"{(f'{rmax:.2e}' if rmax is not None else '-'):>11}"

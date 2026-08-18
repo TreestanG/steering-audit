@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from log import add_logging_args, get_logger
+from log import setup as log_setup
+
 import argparse
 import json
 import random
@@ -23,6 +26,8 @@ TINYSTORIES_CANDIDATES = (
     "TinyStories-valid.txt",
 )
 
+
+logger = get_logger(__name__)
 
 def load_handauthored(path: Path) -> list[dict]:
     raw = json.loads(path.read_text())
@@ -131,21 +136,23 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument("--n-natural", type=int, default=N_NATURAL)
     parser.add_argument("--out", type=Path, default=OUT_PATH)
+    add_logging_args(parser)
     args = parser.parse_args()
+    log_setup(args)
 
     payload = build(args.seed, args.n_natural, args.out)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
 
     counts = Counter(p["category"] for p in payload["prompts"])
-    print(f"wrote {args.out} ({len(payload['prompts'])} prompts)")
+    logger.info("wrote %s (%d prompts)", args.out, len(payload["prompts"]))
     for cat, n in sorted(counts.items()):
-        print(f"  {cat}: {n}")
-    print("examples:")
+        logger.info("  %s: %d", cat, n)
+    logger.info("examples:")
     for cat in sorted(counts):
         example = next(p for p in payload["prompts"] if p["category"] == cat)
         preview = example["text"].replace("\n", "\\n")[:80]
-        print(f"  [{cat}] {preview}")
+        logger.info("  [%s] %s", cat, preview)
 
 
 if __name__ == "__main__":

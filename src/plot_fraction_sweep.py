@@ -8,10 +8,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from paths import experiment_dir, figures_dir
+from paths import logs_dir, experiment_dir, figures_dir
+from log import add_logging_args, get_logger
+from log import setup as log_setup
 from plot_common import THM_BOUND, first_crossing, load_rows, save_fig, style_layer_axis
 
 FRACTION_RE = re.compile(r"steer_audit_f([0-9.eE+-]+)\.jsonl$")
+
+
+logger = get_logger(__name__)
 
 
 def load_sweep(in_dir: Path) -> dict[float, list[dict]]:
@@ -20,7 +25,7 @@ def load_sweep(in_dir: Path) -> dict[float, list[dict]]:
     for path in sorted(in_dir.glob("steer_audit_f*.jsonl")):
         m = FRACTION_RE.search(path.name)
         if m is None:
-            print(f"skipping {path.name}: no fraction in filename")
+            logger.warning("skipping %s: no fraction in filename", path.name)
             continue
         rows = load_rows(path)
         if rows:
@@ -149,7 +154,9 @@ def main() -> None:
                    help="default: results/<slug>/steer/figures/fraction_sweep.png")
     p.add_argument("--rel_tol", type=float, default=1e-3,
                    help="detection floor the audits ran with")
+    add_logging_args(p)
     args = p.parse_args()
+    log_setup(args, default_log=logs_dir(args.model_name) / "plot_fraction.log")
 
     in_dir = Path(args.in_dir) if args.in_dir else experiment_dir(args.model_name, "steer") / "fractions"
     out = Path(args.out) if args.out else figures_dir(args.model_name, "steer") / "fraction_sweep.png"
@@ -157,7 +164,7 @@ def main() -> None:
     sweep = load_sweep(in_dir)
     if not sweep:
         raise SystemExit(f"no steer_audit_f*.jsonl in {in_dir}")
-    print(f"loaded fractions: {', '.join(f'{f:g}' for f in sweep)}")
+    logger.info("loaded fractions: %s", ", ".join(f"{f:g}" for f in sweep))
     plot(sweep, out, args.rel_tol, args.model_name)
 
 

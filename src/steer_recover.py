@@ -8,7 +8,9 @@ import torch.nn.functional as F
 from torch import Tensor
 
 import sipit
-from paths import experiment_dir
+from log import add_logging_args, get_logger
+from log import setup as log_setup
+from paths import experiment_dir, logs_dir
 from sentiment_dir import build_steering_vectors, load_pairs
 from steer_audit import (
     build_targets,
@@ -19,6 +21,9 @@ from steer_audit import (
     steering_delta,
 )
 from utils import DTYPES, load_model, pick_device
+
+
+logger = get_logger(__name__)
 
 
 def cosine(a: Tensor, b: Tensor) -> float:
@@ -131,8 +136,8 @@ def localize_prompt(
 
 
 def summarize_recovery(rows: list[dict], layers: list[int]) -> None:
-    print(
-        f"\nRECOVERY  δ̂ = observed − sipit-recovered-clean\n"
+    logger.info("RECOVERY  δ̂ = observed − sipit-recovered-clean")
+    logger.info(
         f"{'layer':>5} {'recov%':>7} {'cos(δ̂,δ)':>10} {'‖δ̂‖/‖δ‖':>10} {'margin':>8}"
         f"   | random: {'cos':>7} {'recov%':>7}"
     )
@@ -144,7 +149,7 @@ def summarize_recovery(rows: list[dict], layers: list[int]) -> None:
         def mean(fn, kind="steer"):
             return sum(fn(r[kind]) for r in at) / len(at)
 
-        print(
+        logger.info(
             f"{layer:>5} {mean(lambda s: s['recovered']) * 100:>6.0f}% "
             f"{mean(lambda s: s['cos']):>10.4f} "
             f"{mean(lambda s: s['norm_ratio']):>10.4f} "
@@ -154,12 +159,13 @@ def summarize_recovery(rows: list[dict], layers: list[int]) -> None:
         )
     good = [r["steer"]["cos"] for r in rows if r["steer"]["recovered"]]
     if good:
-        print(f"\nwhere token recovered: mean cos(δ̂,δ) = {sum(good) / len(good):.5f}  (n={len(good)})")
+        logger.info("where token recovered: mean cos(δ̂,δ) = %.5f  (n=%d)",
+                    sum(good) / len(good), len(good))
 
 
 def summarize_localization(rows: list[dict]) -> None:
-    print("\nLOCALIZATION  injection layer via residual takeoff")
-    print(f"{'inject':>7} {'detected':>9} {'correct':>8}  (per prompt)")
+    logger.info("LOCALIZATION  injection layer via residual takeoff")
+    logger.info(f"{'inject':>7} {'detected':>9} {'correct':>8}  (per prompt)")
     by_inject: dict[int, list[dict]] = {}
     for r in rows:
         by_inject.setdefault(r["inject_layer"], []).append(r)
@@ -167,7 +173,7 @@ def summarize_localization(rows: list[dict]) -> None:
         at = by_inject[inject]
         detected = [str(r["takeoff"]) for r in at]
         acc = sum(r["correct"] for r in at) / len(at) * 100
-        print(f"{inject:>7} {','.join(detected):>9} {acc:>6.0f}%")
+        logger.info(f"{inject:>7} {','.join(detected):>9} {acc:>6.0f}%")
 
 
 def main() -> None:
@@ -188,13 +194,15 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--out_dir", type=str, default=None,
                    help="default: results/<slug>/steer/")
+    add_logging_args(p)
     args = p.parse_args()
+    log_setup(args, default_log=logs_dir(args.model_name) / "recover.log")
 
     model, _ = load_model(args.model_name, dtype=DTYPES[args.dtype])
     steering = build_steering_vectors(load_pairs(args.train_path))  # before device move
 
     model.to(args.device)
-    print(f"model on {next(model.parameters()).device}")
+    logger.info("model on %s", next(model.parameters()).device)
 
     n_layers = model.config.num_hidden_layers
     layers = sorted(int(s) for s in args.layers.split(",")) if args.layers else list(range(1, n_layers + 1))
@@ -210,7 +218,7 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     rec_path, loc_path = out_dir / "recover.jsonl", out_dir / "localize.jsonl"
 
-    print(f"{len(prompts)} prompts | recover {len(layers)} layers | localize {inject_layers}")
+    logger.info("%d prompts | recover %d layers | localize %s", len(prompts), len(layers), inject_layers)
 
     rec_rows: list[dict] = []
     with rec_path.open("w") as f:
@@ -222,7 +230,7 @@ def main() -> None:
                 f.write(json.dumps(row) + "\n")
             f.flush()
             rec_rows.extend(got)
-            print(f"[recover {i}/{len(prompts)}] {prompt!r} {time.time() - t0:.1f}s")
+            logger.info("  [recover %d/%d] %r %.1fs", i, len(prompts), prompt, time.time() - t0)
 
     loc_rows: list[dict] = []
     with loc_path.open("w") as f:
@@ -235,11 +243,12 @@ def main() -> None:
                 f.write(json.dumps(row) + "\n")
             f.flush()
             loc_rows.extend(got)
-            print(f"[localize {i}/{len(prompts)}] {prompt!r} {time.time() - t0:.1f}s")
+            logger.info("  [localize %d/%d] %r %.1fs", i, len(prompts), prompt, time.time() - t0)
 
     summarize_recovery(rec_rows, layers)
     summarize_localization(loc_rows)
-    print(f"\nwrote {rec_path}\nwrote {loc_path}")
+    logger.info("wrote %s", rec_path)
+    logger.info("wrote %s", loc_path)
 
 
 if __name__ == "__main__":

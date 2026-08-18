@@ -7,9 +7,14 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from paths import experiment_dir, figures_dir
+from paths import logs_dir, experiment_dir, figures_dir
+from log import add_logging_args, get_logger
+from log import setup as log_setup
 from plot_common import C_RAND, C_SEP, C_STEER, save_fig
 from plot_sipit_layers import DEFAULT_REL_TOL, partial_gap_note, summarize
+
+
+logger = get_logger(__name__)
 
 
 def _spearman(xs: list[float], ys: list[float]) -> float | None:
@@ -158,7 +163,9 @@ def main() -> None:
                    help="rel_tol the SipIt sweep used; recovers ‖h‖ = tol / rel_tol")
     p.add_argument("--out", type=str, default=None,
                    help="default: results/<slug>/figures/gap_vs_steering.png")
+    add_logging_args(p)
     args = p.parse_args()
+    log_setup(args, default_log=logs_dir(args.model_name) / "plot_gap.log")
 
     sipit_dir = Path(args.sipit_dir or experiment_dir(args.model_name, "sipit") / "layers")
     gaps = Path(args.gaps or experiment_dir(args.model_name, "sentiment") / "gaps.json")
@@ -171,10 +178,10 @@ def main() -> None:
     out = Path(args.out) if args.out else figures_dir(args.model_name) / "gap_vs_steering.png"
     plot(data, steering["meta"], out, caveat=partial_gap_note(sipit))
 
-    print(f"\n{'L':>3}{'gap/‖h‖':>10}{'steered':>11}{'random':>10}")
+    logger.info(f"{'L':>3}{'gap/‖h‖':>10}{'steered':>11}{'random':>10}")
     for i, L in enumerate(data["layers"]):
-        print(f"{L:>3}{data['sep50'][i]:>10.4f}{data['steered'][i]:>11.4f}"
-              f"{data['random'][i]:>10.4f}")
+        logger.info(f"{L:>3}{data['sep50'][i]:>10.4f}{data['steered'][i]:>11.4f}"
+                    f"{data['random'][i]:>10.4f}")
 
 
 if __name__ == "__main__":

@@ -3,8 +3,14 @@ import argparse
 import torch
 
 from sentiment_dir import build_steering_vectors, load_pairs, make_add_vector_hook
+from log import add_logging_args, get_logger
+from log import setup as log_setup
+from paths import logs_dir
 from steer_audit import layer_state, steering_delta
 from utils import load_model
+
+
+logger = get_logger(__name__)
 
 
 def main():
@@ -24,7 +30,9 @@ def main():
         default=1e-5,
         help="absolute L2 tolerance for steered − base vs the added vector",
     )
+    add_logging_args(parser)
     args = parser.parse_args()
+    log_setup(args, default_log=logs_dir(args.model_name) / "compare_steering.log")
 
     load_model(args.model_name)
     train_pairs = load_pairs(args.train_path)
@@ -45,7 +53,7 @@ def main():
         max_err = (delta - delta_expected).abs().max().item()
         all_ok &= ok
         status = "OK" if ok else "FAIL"
-        print(
+        logger.info(
             f"layer {layer}: {status}  "
             f"||delta||={delta.norm().item():.4f}  "
             f"||expected||={delta_expected.norm().item():.4f}  "
@@ -56,7 +64,7 @@ def main():
         raise SystemExit(
             "Steering vector was not recovered as steered − base at the hooked layer."
         )
-    print("\nAll layers: steered − base matches the added steering vector.")
+    logger.info("all layers: steered − base matches the added steering vector")
 
 
 if __name__ == "__main__":

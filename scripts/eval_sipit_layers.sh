@@ -142,8 +142,8 @@ fi
 
 ids_csv=$(IFS=,; echo "${IDS[*]}")
 
-echo "prompts (${#IDS[@]}): ${IDS[*]}"
-echo "all layers -> ${OUT_DIR:-results/<slug>/sipit/layers}/sipit_layer_XX.jsonl"
+echo "prompts (${#IDS[@]}): ${IDS[*]}" >&2
+[[ -n $OUT_DIR ]] && echo "all layers -> $OUT_DIR/sipit_layer_XX.jsonl" >&2
 
 if [[ $DRY_RUN -eq 1 ]]; then
     exit 0

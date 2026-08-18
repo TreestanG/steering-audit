@@ -10,6 +10,7 @@ Layout, one directory per experiment, data and figures kept apart:
                      figures/audit.png, recover.png, fraction_sweep.png
         sentiment/   gaps.json
         figures/     cross-experiment figures (gap_vs_steering.png, ...)
+        logs/        one log per pipeline stage, plus run.log
 
 Deliberately free of torch/transformers imports so the plotters can use it
 without pulling the whole model stack in.
@@ -28,6 +29,11 @@ def model_slug(model_name: str) -> str:
 
 def results_dir(model_name: str) -> Path:
     return RESULTS_ROOT / model_slug(model_name)
+
+
+def logs_dir(model_name: str) -> Path:
+    """Per-stage logs, beside the artifacts the stage produced."""
+    return results_dir(model_name) / "logs"
 
 
 def experiment_dir(model_name: str, experiment: str) -> Path:

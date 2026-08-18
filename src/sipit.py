@@ -8,7 +8,9 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from paths import experiment_dir, vocab_table_path
+from log import add_logging_args, get_logger
+from log import setup as log_setup
+from paths import experiment_dir, logs_dir, vocab_table_path
 from utils import (
     DTYPES,
     apply_final_norm,
@@ -22,6 +24,8 @@ from utils import (
 
 # Widen on a miss: true tokens usually rank near the top of next-token order.
 DEFAULT_SCHEDULE: tuple[int, ...] = (32, 96, 384, 1536, 6144, 24576)
+
+logger = get_logger(__name__)
 
 # Cap a candidate batch so expanding the prefix KV cache doesn't OOM.
 MAX_BATCH = 4096
@@ -346,18 +350,21 @@ def invert_file(
     )
     elapsed = time.time() - start
 
-    print(f"\n{blob['id']}  layer {layer}  {len(steps)}/{target.shape[0]} positions in {elapsed:.1f}s")
-    print(f"{'t':>3} {'token':>7} {'residual':>10} {'gap':>10} {'res/gap':>10} {'tried':>7}  text")
+    logger.debug("%s  layer %d  %d/%d positions in %.1fs",
+                 blob["id"], layer, len(steps), target.shape[0], elapsed)
+    logger.debug("%3s %7s %10s %10s %10s %7s  text",
+                 "t", "token", "residual", "gap", "res/gap", "tried")
     for t, s in enumerate(steps):
         flag = "" if s["matched"] else "  <-- NO MATCH"
-        print(
-            f"{t:>3} {s['token']:>7} {s['residual']:>10.4g} {s['gap']:>10.4g} "
-            f"{s['ratio']:>10.2e} {s['tried']:>7}  {tokenizer.decode(token_ids=[s['token']])!r}{flag}"
+        logger.debug(
+            "%3d %7d %10.4g %10.4g %10.2e %7d  %r%s",
+            t, s["token"], s["residual"], s["gap"], s["ratio"], s["tried"],
+            tokenizer.decode(token_ids=[s["token"]]), flag,
         )
     recovered = [s["token"] for s in steps]
     recovered_text = tokenizer.decode(token_ids=recovered)
-    print(f"\nrecovered: {recovered_text!r}")
-    print(f"max residual: {max(s['residual'] for s in steps):.6g}")
+    max_residual = max(s["residual"] for s in steps)
+    logger.debug("max residual: %.6g", max_residual)
 
     exact = None
     gold_text = gold_by_id.get(blob["id"])
@@ -366,7 +373,18 @@ def invert_file(
         if max_len:
             gold = gold[:max_len]
         exact = recovered == gold
-        print(f"exact: {exact}")
+
+    # One line per prompt is the right granularity for a stage that runs for
+    # hours; the recovered text is only interesting when it went wrong.
+    verdict = "exact" if exact else ("MISS" if exact is False else "unscored")
+    logger.info(
+        "  %-18s %3d/%-3d pos %7.1fs  max_res %.2e  %s",
+        blob["id"], len(steps), target.shape[0], elapsed, max_residual, verdict,
+    )
+    if exact is False:
+        logger.info("      recovered: %r", recovered_text)
+    else:
+        logger.debug("recovered: %r", recovered_text)
 
     return {
         "id": blob["id"],
@@ -434,7 +452,7 @@ def run_layer(
     try:
         for i, act_path in enumerate(act_paths, start=1):
             if len(act_paths) > 1:
-                print(f"======== [{i}/{len(act_paths)}] {Path(act_path).stem} ========")
+                logger.debug("[%d/%d] %s", i, len(act_paths), Path(act_path).stem)
             row = invert_file(
                 act_path,
                 tokenizer,
@@ -462,10 +480,9 @@ def run_layer(
     if tmp_path is not None and out is not None:
         tmp_path.replace(out)  # atomic; prior results survive a crash above
 
-    if n:
-        print(f"\nexact {ok}/{n} ({ok * 100 // n}%)")
-    if out is not None:
-        print(f"wrote {out}")
+    if n or out is not None:
+        tally = f"exact {ok}/{n} ({ok * 100 // n}%)" if n else "unscored"
+        logger.info("  %s%s", tally, f" -> {out.name}" if out is not None else "")
     return n, ok
 
 
@@ -473,6 +490,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
     parser.add_argument("--device", type=str, default=pick_device())
+    add_logging_args(parser)
     parser.add_argument("--dtype", type=str, default="float32", choices=list(DTYPES))
     parser.add_argument(
         "--act_path",
@@ -556,6 +574,7 @@ def main():
         help="default: results/<slug>/sipit/layers/",
     )
     args = parser.parse_args()
+    log_setup(args, default_log=logs_dir(args.model_name) / "sipit.log")
     if args.all_layers and args.out:
         parser.error("--all_layers writes per-layer jsonl; use --out_dir, not --out")
     if args.out_dir and not args.all_layers:
@@ -572,8 +591,8 @@ def main():
     rel_tol: float = rel_tol_for(dtype) if args.rel_tol is None else float(args.rel_tol)
     model, tokenizer = load_model(args.model_name, dtype=dtype)
     model.to(args.device)
-    print(f"model on {next(model.parameters()).device}, dtype {next(model.parameters()).dtype}, "
-          f"rel_tol {rel_tol:g}")
+    logger.info("model on %s, %s, rel_tol %g", next(model.parameters()).device,
+                str(next(model.parameters()).dtype).replace("torch.", ""), rel_tol)
 
     gold_by_id: dict[str, str] = {}
     bank = Path(args.data_path)
@@ -599,11 +618,12 @@ def main():
         n_layers = n_layers_in(args.act_path[0])
         last = n_layers - 1
         out_dir = Path(args.out_dir) if args.out_dir else None
-        print(f"sweeping layers 0..{last}" + (f" -> {out_dir}/sipit_layer_XX.jsonl" if out_dir else ""))
+        logger.info("sweeping layers 0..%d%s", last,
+                    f" -> {out_dir}/sipit_layer_XX.jsonl" if out_dir else "")
         total_ok = total_n = 0
         for layer in range(n_layers):
             out = out_dir / f"sipit_layer_{layer:02d}.jsonl" if out_dir else None
-            print(f"======== layer {layer} / {last} -> {out} ========")
+            logger.info("layer %02d/%d", layer, last)
             vocab_layer = load_vocab_layer(vocab_table, layer)
             n, ok = run_layer(
                 args.act_path, tokenizer, vocab_layer, gold_by_id,
@@ -612,7 +632,7 @@ def main():
             total_n += n
             total_ok += ok
         if total_n:
-            print(f"\nexact {total_ok}/{total_n} across {n_layers} layers")
+            logger.info("exact %d/%d across %d layers", total_ok, total_n, n_layers)
         return
 
     layer = 12 if args.layer is None else args.layer

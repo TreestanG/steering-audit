@@ -6,7 +6,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from paths import experiment_dir, figures_dir
+from paths import logs_dir, experiment_dir, figures_dir
+from log import add_logging_args, get_logger
+from log import setup as log_setup
 from plot_common import (
     THM_BOUND,
     C_MARGIN,
@@ -18,6 +20,9 @@ from plot_common import (
     style_layer_axis,
     xy,
 )
+
+
+logger = get_logger(__name__)
 
 
 def _plot_metric(ax, layers, ys, color, label, ls="-"):
@@ -134,7 +139,9 @@ def main() -> None:
                    help="default: results/<slug>/steer/localize.jsonl")
     p.add_argument("--out", type=str, default=None,
                    help="default: results/<slug>/steer/figures/recover.png")
+    add_logging_args(p)
     args = p.parse_args()
+    log_setup(args, default_log=logs_dir(args.model_name) / "plot_recover.log")
 
     sdir = experiment_dir(args.model_name, "steer")
     rec = Path(args.recover) if args.recover else sdir / "recover.jsonl"

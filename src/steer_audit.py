@@ -10,7 +10,9 @@ from torch import Tensor
 import sipit
 from sentiment_dir import _steer_hidden, build_steering_vectors, load_pairs
 from sipit import Top2
-from paths import experiment_dir
+from log import add_logging_args, get_logger
+from log import setup as log_setup
+from paths import experiment_dir, logs_dir
 from utils import (
     DTYPES,
     apply_final_norm,
@@ -21,6 +23,9 @@ from utils import (
     rel_tol_for,
     require_model,
 )
+
+
+logger = get_logger(__name__)
 
 
 def steering_delta(direction: Tensor, scale: Tensor, fraction: float) -> Tensor:
@@ -227,9 +232,10 @@ def audit_prompt(
 
 def summarize(rows: list[dict], layers: list[int]) -> None:
     """Per-layer means across prompts — the paired version of the two-curve overlay."""
-    print(
-        f"\n{'layer':>5} {'||h||':>9} {'gap/||h||':>10} {'res/||h||':>10} {'res/gap':>9} "
-        f"{'recov':>6} {'det':>5}   | random: {'res/gap':>9} {'recov':>6} {'det':>5}"
+    logger.info(
+        "%5s %9s %10s %10s %9s %6s %5s   | random: %9s %6s %5s",
+        "layer", "||h||", "gap/||h||", "res/||h||", "res/gap", "recov", "det",
+        "res/gap", "recov", "det",
     )
     for layer in layers:
         at = [r for r in rows if r["layer"] == layer]
@@ -239,7 +245,7 @@ def summarize(rows: list[dict], layers: list[int]) -> None:
         def mean(fn):
             return sum(fn(r) for r in at) / len(at)
 
-        print(
+        logger.info(
             f"{layer:>5} {mean(lambda r: r['h_norm']):>9.2f} "
             f"{mean(lambda r: r['rel_gap']):>10.4f} "
             f"{mean(lambda r: r['steer']['rel_residual']):>10.4f} "
@@ -252,7 +258,8 @@ def summarize(rows: list[dict], layers: list[int]) -> None:
         )
     clean_res = max(r["clean"]["residual"] / r["h_norm"] for r in rows)
     clean_ok = sum(r["clean"]["recovered"] for r in rows) / len(rows)
-    print(f"\nsanity: clean recovery {clean_ok * 100:.0f}%, worst clean residual/||h|| {clean_res:.2e}")
+    logger.info("sanity: clean recovery %.0f%%, worst clean residual/||h|| %.2e",
+                clean_ok * 100, clean_res)
 
 
 def main():
@@ -294,7 +301,9 @@ def main():
         default=None,
         help="default: results/<slug>/steer/audit.jsonl",
     )
+    add_logging_args(parser)
     args = parser.parse_args()
+    log_setup(args, default_log=logs_dir(args.model_name) / "audit.log")
     if args.out is None:
         args.out = experiment_dir(args.model_name, "steer") / "audit.jsonl"
 
@@ -307,7 +316,7 @@ def main():
     steering = build_steering_vectors(load_pairs(args.train_path))
 
     model.to(args.device)
-    print(f"model on {next(model.parameters()).device}")
+    logger.info("model on %s", next(model.parameters()).device)
 
     layers = (
         [int(s) for s in args.layers.split(",")]
@@ -315,7 +324,7 @@ def main():
         else list(range(1, model.config.num_hidden_layers + 1))
     )
     prompts = [neg for _, neg in load_pairs(args.test_path)][: args.n_prompts]
-    print(f"{len(prompts)} prompts x {len(layers)} layers, fraction={args.fraction}")
+    logger.info("%d prompts x %d layers, fraction=%g", len(prompts), len(layers), args.fraction)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     rows: list[dict] = []
@@ -335,10 +344,10 @@ def main():
                 f.write(json.dumps(row) + "\n")
             f.flush()
             rows.extend(got)
-            print(f"[{i}/{len(prompts)}] {prompt!r} in {time.time() - start:.1f}s")
+            logger.info("  [%d/%d] %r in %.1fs", i, len(prompts), prompt, time.time() - start)
 
     summarize(rows, layers)
-    print(f"wrote {args.out}")
+    logger.info("wrote %s", args.out)
 
 
 if __name__ == "__main__":

@@ -120,14 +120,14 @@ if [[ $ALL_LAYERS -eq 1 ]]; then
     fi
     extra=(--all_layers)
     [[ -n $OUT_DIR ]] && extra+=(--out_dir "$OUT_DIR")
-    echo "running SipIt on ${#files[@]} prompts, all layers${OUT_DIR:+ -> $OUT_DIR}"
+    echo "running SipIt on ${#files[@]} prompts, all layers${OUT_DIR:+ -> $OUT_DIR}" >&2
     uv run src/sipit.py --act_path "${files[@]}" "${extra[@]}" ${SIPIT_ARGS[@]+"${SIPIT_ARGS[@]}"}
 else
     if [[ -n $OUT_DIR ]]; then
         echo "eval_sipit_single.sh: --out_dir requires --all_layers" >&2
         exit 1
     fi
-    echo "running SipIt on ${#files[@]} prompts${OUT:+ -> $OUT}"
+    echo "running SipIt on ${#files[@]} prompts${OUT:+ -> $OUT}" >&2
     out_arg=()
     [[ -n $OUT ]] && out_arg=(--out "$OUT")
     uv run src/sipit.py --act_path "${files[@]}" ${out_arg[@]+"${out_arg[@]}"} \

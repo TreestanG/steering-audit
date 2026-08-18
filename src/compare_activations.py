@@ -8,23 +8,27 @@ import torch.nn.functional as F
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from paths import figures_dir
+from log import add_logging_args, get_logger
+from log import setup as log_setup
+from paths import figures_dir, logs_dir
 from utils import get_token_activations, load_model
+
+logger = get_logger(__name__)
+
 
 def load_comparisons(path):
     with open(path) as f:
         return json.load(f)
 
 
-def cosine_similarity_by_layer(prompt1, prompt2, verbose=False) -> list[float]:
+def cosine_similarity_by_layer(prompt1, prompt2) -> list[float]:
     acts1, _ = get_token_activations([prompt1], last_only=True)
     acts2, _ = get_token_activations([prompt2], last_only=True)
 
     similarities = []
     for i, (act1, act2) in enumerate(zip(acts1[:, 0], acts2[:, 0])):
         sim = F.cosine_similarity(act1.float(), act2.float(), dim=0).item()
-        if verbose:
-            print(f"Layer {i}. Similarity: {sim}")
+        logger.debug("layer %d similarity %.4f", i, sim)
         similarities.append(sim)
     return similarities
 
@@ -54,14 +58,16 @@ def plot_averages(averages, n_layers, path):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(path, dpi=200)
-    print(f"Saved graph to {path}")
+    logger.info("saved %s", path)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
     parser.add_argument("--data_path", type=str, default="data/prompt_comparisons.json")
+    add_logging_args(parser)
     args = parser.parse_args()
+    log_setup(args, default_log=logs_dir(args.model_name) / "compare.log")
 
     model, _ = load_model(args.model_name)
     data = load_comparisons(args.data_path)

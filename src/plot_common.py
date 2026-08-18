@@ -3,6 +3,11 @@
 from pathlib import Path
 import json
 
+from log import get_logger
+
+# Thm 3.2: exact recovery guaranteed while residual/gap < 1/2.
+logger = get_logger(__name__)
+
 # Thm 3.2: exact recovery guaranteed while residual/gap < 1/2.
 THM_BOUND = 0.5
 
@@ -34,7 +39,7 @@ def save_fig(fig, out: Path) -> None:
     import matplotlib.pyplot as plt
 
     plt.close(fig)
-    print(f"saved {out}")
+    logger.info("saved %s", out)
 
 
 def first_crossing(xs: list, ys: list, thresh: float):

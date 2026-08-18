@@ -2,8 +2,13 @@ import argparse
 
 import torch
 
-from paths import activations_dir
+from log import add_logging_args, get_logger, heartbeat
+from log import setup as log_setup
+from paths import activations_dir, logs_dir
 from utils import DTYPES, load_model
+
+
+logger = get_logger(__name__)
 
 
 def main():
@@ -13,7 +18,9 @@ def main():
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--dtype", type=str, default="float32", choices=list(DTYPES))
     parser.add_argument("--device", type=str, default=None, help="default: CPU")
+    add_logging_args(parser)
     args = parser.parse_args()
+    log_setup(args, default_log=logs_dir(args.model_name) / "vocab.log")
 
     model, _ = load_model(args.model_name, dtype=DTYPES[args.dtype])
     if args.device:
@@ -50,7 +57,7 @@ def main():
                 ).hidden_states
             stacked = torch.stack([h[:, 0] for h in hidden_states], dim=1)  # [B, n_layers, H]
             table[start:end] = stacked.cpu()
-            print(f"vocab {end}/{vocab_size}")
+            heartbeat(logger, end, vocab_size, "vocab")
 
         torch.save(
             {
@@ -64,7 +71,7 @@ def main():
     finally:
         del table
         scratch.unlink(missing_ok=True)
-    print(f"Saved {(vocab_size, n_layers, hidden)} to {path}")
+    logger.info("vocab table [%d, %d, %d] -> %s", vocab_size, n_layers, hidden, path)
 
 
 if __name__ == "__main__":

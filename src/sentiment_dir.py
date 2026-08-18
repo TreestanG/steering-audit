@@ -6,8 +6,13 @@ import numpy as np
 import torch
 
 import utils
-from paths import experiment_dir
+from log import add_logging_args, get_logger
+from log import setup as log_setup
+from paths import experiment_dir, logs_dir
 from utils import get_decoder_layers, get_token_activations, load_model
+
+logger = get_logger(__name__)
+
 
 def load_pairs(path):
     with open(path) as f:
@@ -106,7 +111,9 @@ def main():
     parser.add_argument("--word_neg", type=str, default=" sad")
     parser.add_argument("--out", type=Path, default=None,
                         help="default: results/<slug>/sentiment/gaps.json")
+    add_logging_args(parser)
     args = parser.parse_args()
+    log_setup(args, default_log=logs_dir(args.model_name) / "sentiment.log")
     if args.out is None:
         args.out = experiment_dir(args.model_name, "sentiment") / "gaps.json"
 
@@ -123,6 +130,7 @@ def main():
         for _, neg in test_pairs
     }
     layers_out = []
+    logger.info("%5s %12s %11s", "layer", "steered_gap", "random_gap")
     for i, (direction, mean_residual_norm) in steering.items():
         hook_fn = make_add_vector_hook(direction, mean_residual_norm, args.fraction)
         random_hook_fn = make_random_vector_hook(mean_residual_norm, args.fraction)
@@ -138,9 +146,7 @@ def main():
 
         steered_mean = torch.stack(differences).mean().item()
         random_mean = torch.stack(random_differences).mean().item()
-        print(f"layer {i}  Steered gap mean: {steered_mean}")
-        print(f"layer {i}  Random gap mean: {random_mean}")
-        print("--------------------------------")
+        logger.info("%5d %12.4f %11.4f", i, steered_mean, random_mean)
         layers_out.append(
             {
                 "layer": i,
@@ -158,7 +164,7 @@ def main():
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(payload, indent=2) + "\n")
-    print(f"wrote {args.out}")
+    logger.info("wrote %s", args.out)
 
 
 if __name__ == "__main__":
