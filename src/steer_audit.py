@@ -11,7 +11,14 @@ import sipit
 from sentiment_dir import _steer_hidden, build_steering_vectors, load_pairs
 from sipit import Top2
 from paths import results_dir
-from utils import apply_final_norm, get_base_model, get_decoder_layers, load_model, require_model
+from utils import (
+    apply_final_norm,
+    get_base_model,
+    get_decoder_layers,
+    load_model,
+    pick_device,
+    require_model,
+)
 
 
 def steering_delta(direction: Tensor, scale: Tensor, fraction: float) -> Tensor:
@@ -249,6 +256,7 @@ def summarize(rows: list[dict], layers: list[int]) -> None:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
+    parser.add_argument("--device", type=str, default=pick_device())
     parser.add_argument("--train_path", type=str, default="data/sentiment_opposites_train.json")
     parser.add_argument(
         "--test_path",
@@ -292,8 +300,7 @@ def main():
     # Built before the device move: get_token_activations feeds the model CPU tensors.
     steering = build_steering_vectors(load_pairs(args.train_path))
 
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    model.to(device)
+    model.to(args.device)
     print(f"model on {next(model.parameters()).device}")
 
     layers = (

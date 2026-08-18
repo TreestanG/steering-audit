@@ -12,6 +12,14 @@ model: PreTrainedModel | None = None
 tokenizer: PreTrainedTokenizerBase | None = None
 
 
+def pick_device() -> str:
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 def load_model(model_name: str) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
     global model, tokenizer
     tokenizer = cast(PreTrainedTokenizerBase, AutoTokenizer.from_pretrained(model_name))

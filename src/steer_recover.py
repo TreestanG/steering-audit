@@ -18,7 +18,7 @@ from steer_audit import (
     scan_vocab,
     steering_delta,
 )
-from utils import load_model
+from utils import load_model, pick_device
 
 
 def cosine(a: Tensor, b: Tensor) -> float:
@@ -173,6 +173,7 @@ def summarize_localization(rows: list[dict]) -> None:
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
+    p.add_argument("--device", type=str, default=pick_device())
     p.add_argument("--train_path", type=str, default="data/sentiment_opposites_train.json")
     p.add_argument("--test_path", type=str, default="data/sentiment_opposites_test.json")
     p.add_argument("--fraction", type=float, default=0.1)
@@ -191,8 +192,7 @@ def main() -> None:
     model, _ = load_model(args.model_name)
     steering = build_steering_vectors(load_pairs(args.train_path))  # before device move
 
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    model.to(device)
+    model.to(args.device)
     print(f"model on {next(model.parameters()).device}")
 
     n_layers = model.config.num_hidden_layers
