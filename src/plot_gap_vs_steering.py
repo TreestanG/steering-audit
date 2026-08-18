@@ -1,5 +1,6 @@
 import argparse
 import json
+import re
 from pathlib import Path
 
 import matplotlib
@@ -10,7 +11,7 @@ import matplotlib.pyplot as plt
 from paths import logs_dir, experiment_dir, figures_dir
 from log import add_logging_args, get_logger
 from log import setup as log_setup
-from plot_common import C_RAND, C_SEP, C_STEER, save_fig
+from plot_common import C_RAND, C_SEP, C_STEER, load_rows, save_fig
 from plot_sipit_layers import DEFAULT_REL_TOL, partial_gap_note, summarize
 
 
@@ -45,10 +46,31 @@ def _spearman(xs: list[float], ys: list[float]) -> float | None:
     return cov / (vx * vy) if vx and vy else None
 
 
-def load_steering(path: Path) -> dict:
+def load_steering(path: Path, fraction: float | None = None) -> dict:
+    """Efficacy at one steering strength.
+
+    gaps.json now carries every fraction, so a layer appears once per fraction;
+    without filtering, dict-building would silently keep whichever came last.
+    Old single-fraction files have no per-entry "fraction" and pass through.
+    """
     d = json.loads(path.read_text())
-    by_layer = {e["layer"]: e for e in d["layers"]}
-    return {"meta": d, "by_layer": by_layer}
+    entries = d["layers"]
+    have = sorted({e["fraction"] for e in entries if "fraction" in e})
+    if have:
+        pick = fraction if fraction in have else min(have, key=lambda f: abs(f - (fraction or 0.1)))
+        entries = [e for e in entries if e["fraction"] == pick]
+        d = {**d, "fraction": pick}
+    return {"meta": d, "by_layer": {e["layer"]: e for e in entries}, "all": json.loads(path.read_text())["layers"]}
+
+
+def load_detection(in_dir: Path) -> dict[float, list[dict]]:
+    """{fraction: audit rows} from the detection sweep, for the efficacy overlay."""
+    out = {}
+    for path in sorted(in_dir.glob("steer_audit_f*.jsonl")):
+        m = re.search(r"_f([0-9.eE+-]+)\.jsonl$", path.name)
+        if m:
+            out[float(m.group(1))] = load_rows(path)
+    return dict(sorted(out.items()))
 
 
 def align(sipit_summaries: list[dict], steering: dict) -> dict:
@@ -131,12 +153,64 @@ def _panel_shape(ax, data):
     ax.grid(True, alpha=0.3)
 
 
-def plot(data: dict, meta: dict, out: Path, caveat: str | None = None) -> None:
+def _panel_window(ax, efficacy_rows: list[dict], detection: dict[float, list[dict]], rel_tol: float):
+    """Does a steer exist that works behaviourally but stays under the alarm?
+
+    Efficacy and detectability are both monotone in steering strength, so the
+    question is only whether the curves cross anywhere: a strength that moves the
+    model while sitting near the clean-inversion floor would be a blind spot.
+    """
+    fracs = sorted({e["fraction"] for e in efficacy_rows if "fraction" in e})
+    if not fracs or not detection:
+        ax.text(0.5, 0.5, "needs a --fractions sweep on both sides",
+                ha="center", va="center", transform=ax.transAxes, fontsize=8)
+        ax.set_title("Efficacy vs detectability")
+        return
+
+    kl, kl_rand, flip = [], [], []
+    for f in fracs:
+        at = [e for e in efficacy_rows if e["fraction"] == f]
+        kl.append(sum(e["kl_mean"] for e in at) / len(at))
+        kl_rand.append(sum(e.get("kl_random_mean", 0.0) for e in at) / len(at))
+        flip.append(100 * sum(e.get("flip_rate", 0.0) for e in at) / len(at))
+
+    shared = [f for f in fracs if f in detection]
+    head = [
+        (sum(r["steer"]["rel_residual"] for r in detection[f]) / len(detection[f])) / rel_tol
+        for f in shared
+    ]
+
+    ax.plot(fracs, kl, "o-", ms=4, color=C_STEER, label="efficacy: KL(steered‖clean)")
+    ax.plot(fracs, kl_rand, ".--", ms=5, color=C_RAND, label="KL of random control")
+    if shared:
+        ax.plot(shared, head, "s-", ms=4, color=C_SEP, label="detectability: residual / alarm floor")
+    ax.axhline(1.0, color="0.6", lw=0.8, ls=":")
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("steering fraction (of mean ‖h‖)")
+    ax.set_ylabel("KL (nats)  /  detection headroom (×)")
+    ax.set_title("Efficacy vs detectability — is there a window to hide in?")
+    ax.legend(fontsize=7, loc="upper left")
+
+    # Mark where the steer stops being surgical: the norm-matched random push
+    # disturbs the distribution as much as the sentiment one.
+    for f, k, kr, fl in zip(fracs, kl, kl_rand, flip):
+        if kr >= k:
+            ax.axvspan(f, max(fracs), color="C3", alpha=0.07, zorder=0)
+            ax.annotate("random ≈ steered:\ndestructive, not steering",
+                        xy=(f, max(kl)), fontsize=6.5, color="C3", ha="left", va="top")
+            break
+
+
+def plot(data: dict, meta: dict, out: Path, caveat: str | None = None,
+         efficacy_rows: list[dict] | None = None,
+         detection: dict[float, list[dict]] | None = None, rel_tol: float = 1e-3) -> None:
     layers = data["layers"]
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
+    fig, axes = plt.subplots(1, 3, figsize=(19, 5.5))
     _panel_twin(axes[0], data, meta)
     _panel_shape(axes[1], data)
-    for ax in axes:
+    _panel_window(axes[2], efficacy_rows or [], detection or {}, rel_tol)
+    for ax in axes[:2]:
         ax.set_xticks(layers[::2] if len(layers) > 14 else layers)
     title = (
         f"gap/‖h‖ vs steered gap — {meta['model_name']}, "
@@ -163,6 +237,10 @@ def main() -> None:
                    help="rel_tol the SipIt sweep used; recovers ‖h‖ = tol / rel_tol")
     p.add_argument("--out", type=str, default=None,
                    help="default: results/<slug>/figures/gap_vs_steering.png")
+    p.add_argument("--fraction", type=float, default=0.1,
+                   help="which steering strength panels A/B use, when gaps.json has several")
+    p.add_argument("--detection_dir", type=str, default=None,
+                   help="default: results/<slug>/steer/fractions (for the efficacy overlay)")
     add_logging_args(p)
     args = p.parse_args()
     log_setup(args, default_log=logs_dir(args.model_name) / "plot_gap.log")
@@ -170,13 +248,16 @@ def main() -> None:
     sipit_dir = Path(args.sipit_dir or experiment_dir(args.model_name, "sipit") / "layers")
     gaps = Path(args.gaps or experiment_dir(args.model_name, "sentiment") / "gaps.json")
     sipit = summarize(sipit_dir, rel_tol=args.rel_tol)
-    steering = load_steering(gaps)
+    steering = load_steering(gaps, fraction=args.fraction)
+    det_dir = Path(args.detection_dir or experiment_dir(args.model_name, "steer") / "fractions")
+    detection = load_detection(det_dir) if det_dir.exists() else {}
     data = align(sipit, steering)
     if not data["layers"]:
         raise SystemExit("no overlapping layers between SipIt results and sentiment_gaps.json")
 
     out = Path(args.out) if args.out else figures_dir(args.model_name) / "gap_vs_steering.png"
-    plot(data, steering["meta"], out, caveat=partial_gap_note(sipit))
+    plot(data, steering["meta"], out, caveat=partial_gap_note(sipit),
+         efficacy_rows=steering.get("all"), detection=detection, rel_tol=args.rel_tol)
 
     logger.info(f"{'L':>3}{'gap/‖h‖':>10}{'steered':>11}{'random':>10}")
     for i, L in enumerate(data["layers"]):

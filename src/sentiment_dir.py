@@ -92,6 +92,25 @@ def logit_gap(logits, word_pos, word_neg):
     return logits[token_id(word_pos)] - logits[token_id(word_neg)]
 
 
+def efficacy(clean_logits, steered_logits_, word_pos, word_neg):
+    """How much a steer actually changed the model, three ways.
+
+    gap   Δ(logit_pos − logit_neg): did sentiment move in the intended direction.
+          Sees exactly two tokens, so it cannot tell surgical from destructive.
+    kl    KL(steered ‖ clean) over the whole next-token distribution, in nats.
+          Written out longhand because F.kl_div(input, target) computes
+          KL(target ‖ input) and silently gives a plausible number if reversed.
+    flip  did the argmax token change.
+    """
+    gap = float(logit_gap(steered_logits_, word_pos, word_neg)
+                - logit_gap(clean_logits, word_pos, word_neg))
+    logp = torch.log_softmax(clean_logits.float(), dim=-1)
+    logq = torch.log_softmax(steered_logits_.float(), dim=-1)
+    kl = float((logq.exp() * (logq - logp)).sum())
+    flip = int(steered_logits_.argmax() != clean_logits.argmax())
+    return gap, kl, flip
+
+
 def steered_logits(prompt, hook_fn, layer):
     """Last-token logits with `hook_fn` active on block `layer`."""
     handle = get_decoder_layers()[layer - 1].register_forward_hook(hook_fn)
@@ -106,7 +125,9 @@ def main():
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
     parser.add_argument("--train_path", type=str, default="data/sentiment_opposites_train.json")
     parser.add_argument("--test_path", type=str, default="data/sentiment_opposites_test.json")
-    parser.add_argument("--fraction", type=float, default=0.1)
+    parser.add_argument("--fractions", type=str, default="0.1",
+                        help="comma-separated steering strengths; pass the same grid as "
+                             "sweep_steer_fractions.sh to cross efficacy with detection")
     parser.add_argument("--word_pos", type=str, default=" happy")
     parser.add_argument("--word_neg", type=str, default=" sad")
     parser.add_argument("--out", type=Path, default=None,
@@ -117,6 +138,7 @@ def main():
     if args.out is None:
         args.out = experiment_dir(args.model_name, "sentiment") / "gaps.json"
 
+    fractions = [float(f) for f in args.fractions.split(",") if f]
     load_model(args.model_name)
 
     train_pairs = load_pairs(args.train_path)
@@ -125,39 +147,48 @@ def main():
     steering = build_steering_vectors(train_pairs)
     # The unsteered baseline depends only on the prompt, so it is computed once
     # here rather than inside the per-layer, per-hook loop below.
-    base_gaps = {
-        neg: logit_gap(last_token_logits(neg), args.word_pos, args.word_neg)
-        for _, neg in test_pairs
-    }
+    # The unsteered forward depends only on the prompt, so it is done once and
+    # reused as the reference for every (layer, fraction, kind) comparison.
+    clean = {neg: last_token_logits(neg) for _, neg in test_pairs}
+
     layers_out = []
-    logger.info("%5s %12s %11s", "layer", "steered_gap", "random_gap")
-    for i, (direction, mean_residual_norm) in steering.items():
-        hook_fn = make_add_vector_hook(direction, mean_residual_norm, args.fraction)
-        random_hook_fn = make_random_vector_hook(mean_residual_norm, args.fraction)
+    logger.info("%8s %5s %12s %11s %9s %9s %7s",
+                "fraction", "layer", "steered_gap", "random_gap", "KL", "KL_rand", "flip%")
+    for frac in fractions:
+        for i, (direction, mean_residual_norm) in steering.items():
+            hook_fn = make_add_vector_hook(direction, mean_residual_norm, frac)
+            random_hook_fn = make_random_vector_hook(mean_residual_norm, frac)
 
-        differences = []
-        random_differences = []
-        for _, prompt_neg in test_pairs:
-            base_gap = base_gaps[prompt_neg]
-            steered = steered_logits(prompt_neg, hook_fn, i)
-            rand = steered_logits(prompt_neg, random_hook_fn, i)
-            differences.append(logit_gap(steered, args.word_pos, args.word_neg) - base_gap)
-            random_differences.append(logit_gap(rand, args.word_pos, args.word_neg) - base_gap)
+            rows = []
+            for _, prompt_neg in test_pairs:
+                base = clean[prompt_neg]
+                rows.append((
+                    efficacy(base, steered_logits(prompt_neg, hook_fn, i),
+                             args.word_pos, args.word_neg),
+                    efficacy(base, steered_logits(prompt_neg, random_hook_fn, i),
+                             args.word_pos, args.word_neg),
+                ))
 
-        steered_mean = torch.stack(differences).mean().item()
-        random_mean = torch.stack(random_differences).mean().item()
-        logger.info("%5d %12.4f %11.4f", i, steered_mean, random_mean)
-        layers_out.append(
-            {
+            n = len(rows)
+            mean = lambda sel, j: sum(r[sel][j] for r in rows) / n  # noqa: E731
+            entry = {
                 "layer": i,
-                "steered_gap_mean": steered_mean,
-                "random_gap_mean": random_mean,
+                "fraction": frac,
+                "steered_gap_mean": mean(0, 0),
+                "random_gap_mean": mean(1, 0),
+                "kl_mean": mean(0, 1),
+                "kl_random_mean": mean(1, 1),
+                "flip_rate": mean(0, 2),
+                "flip_rate_random": mean(1, 2),
             }
-        )
+            logger.info("%8g %5d %12.4f %11.4f %9.4f %9.4f %6.0f%%",
+                        frac, i, entry["steered_gap_mean"], entry["random_gap_mean"],
+                        entry["kl_mean"], entry["kl_random_mean"], 100 * entry["flip_rate"])
+            layers_out.append(entry)
 
     payload = {
         "model_name": args.model_name,
-        "fraction": args.fraction,
+        "fractions": fractions,
         "word_pos": args.word_pos,
         "word_neg": args.word_neg,
         "layers": layers_out,
