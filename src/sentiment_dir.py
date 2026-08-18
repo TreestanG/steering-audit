@@ -14,10 +14,6 @@ def load_pairs(path):
     return list(data.values())
 
 
-def build_steering_vector(pairs, layer):
-    return build_steering_vectors(pairs, layers=[layer])[layer]
-
-
 def build_steering_vectors(pairs, layers=None):
     if layers is None:
         layers = list(range(1, len(get_decoder_layers()) + 1))
@@ -74,7 +70,6 @@ def make_random_vector_hook(scale, fraction):
 
 
 def last_token_logits(prompt):
-
     assert utils.model is not None and utils.tokenizer is not None
     inputs = utils.tokenizer(prompt, return_tensors="pt")
     with torch.no_grad():
@@ -87,18 +82,17 @@ def token_id(word):
     return utils.tokenizer.encode(word)[-1]
 
 
-def logits_diff(prompt, word_pos, word_neg, hook_fn, layer):
+def logit_gap(logits, word_pos, word_neg):
+    return logits[token_id(word_pos)] - logits[token_id(word_neg)]
+
+
+def steered_logits(prompt, hook_fn, layer):
+    """Last-token logits with `hook_fn` active on block `layer`."""
     handle = get_decoder_layers()[layer - 1].register_forward_hook(hook_fn)
     try:
-        steered = last_token_logits(prompt)
+        return last_token_logits(prompt)
     finally:
         handle.remove()
-
-    base = last_token_logits(prompt)
-    pos_id, neg_id = token_id(word_pos), token_id(word_neg)
-    steered_gap = steered[pos_id] - steered[neg_id]
-    base_gap = base[pos_id] - base[neg_id]
-    return steered_gap, base_gap
 
 
 def main():
@@ -118,6 +112,12 @@ def main():
     test_pairs = load_pairs(args.test_path)
 
     steering = build_steering_vectors(train_pairs)
+    # The unsteered baseline depends only on the prompt, so it is computed once
+    # here rather than inside the per-layer, per-hook loop below.
+    base_gaps = {
+        neg: logit_gap(last_token_logits(neg), args.word_pos, args.word_neg)
+        for _, neg in test_pairs
+    }
     layers_out = []
     for i, (direction, mean_residual_norm) in steering.items():
         hook_fn = make_add_vector_hook(direction, mean_residual_norm, args.fraction)
@@ -125,15 +125,12 @@ def main():
 
         differences = []
         random_differences = []
-        for prompt_pos, prompt_neg in test_pairs:
-            steered_gap, base_gap = logits_diff(
-                prompt_neg, args.word_pos, args.word_neg, hook_fn, i
-            )
-            steered_gap_rand, base_gap_rand = logits_diff(
-                prompt_neg, args.word_pos, args.word_neg, random_hook_fn, i
-            )
-            differences.append(steered_gap - base_gap)
-            random_differences.append(steered_gap_rand - base_gap_rand)
+        for _, prompt_neg in test_pairs:
+            base_gap = base_gaps[prompt_neg]
+            steered = steered_logits(prompt_neg, hook_fn, i)
+            rand = steered_logits(prompt_neg, random_hook_fn, i)
+            differences.append(logit_gap(steered, args.word_pos, args.word_neg) - base_gap)
+            random_differences.append(logit_gap(rand, args.word_pos, args.word_neg) - base_gap)
 
         steered_mean = torch.stack(differences).mean().item()
         random_mean = torch.stack(random_differences).mean().item()
