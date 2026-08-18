@@ -7,7 +7,7 @@ from log import add_logging_args, get_logger
 from log import setup as log_setup
 from paths import logs_dir
 from steer_audit import layer_state, steering_delta
-from utils import load_model
+from utils import DTYPES, add_model_args, load_model, model_device
 
 
 logger = get_logger(__name__)
@@ -30,11 +30,13 @@ def main():
         default=1e-5,
         help="absolute L2 tolerance for steered − base vs the added vector",
     )
+    add_model_args(parser)
     add_logging_args(parser)
     args = parser.parse_args()
     log_setup(args, default_log=logs_dir(args.model_name) / "compare_steering.log")
 
-    load_model(args.model_name)
+    load_model(args.model_name, dtype=DTYPES[args.dtype], device=args.device)
+    logger.info("model on %s, %s", model_device(), args.dtype)
     train_pairs = load_pairs(args.train_path)
     steering = build_steering_vectors(train_pairs)
     all_ok = True

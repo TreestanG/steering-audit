@@ -13,11 +13,12 @@ from log import setup as log_setup
 from paths import experiment_dir, logs_dir, vocab_table_path
 from utils import (
     DTYPES,
+    add_model_args,
     apply_final_norm,
     get_base_model,
     get_decoder_layers,
     load_model,
-    pick_device,
+    model_device,
     rel_tol_for,
     require_model,
 )
@@ -494,9 +495,8 @@ def run_layer(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
-    parser.add_argument("--device", type=str, default=pick_device())
+    add_model_args(parser)
     add_logging_args(parser)
-    parser.add_argument("--dtype", type=str, default="float32", choices=list(DTYPES))
     parser.add_argument(
         "--act_path",
         type=str,
@@ -594,10 +594,8 @@ def main():
     vocab_path = args.vocab_path or str(vocab_table_path(args.model_name))
     dtype = DTYPES[args.dtype]
     rel_tol: float = rel_tol_for(dtype) if args.rel_tol is None else float(args.rel_tol)
-    model, tokenizer = load_model(args.model_name, dtype=dtype)
-    model.to(args.device)
-    logger.info("model on %s, %s, rel_tol %g", next(model.parameters()).device,
-                str(next(model.parameters()).dtype).replace("torch.", ""), rel_tol)
+    model, tokenizer = load_model(args.model_name, dtype=dtype, device=args.device)
+    logger.info("model on %s, %s, rel_tol %g", model_device(), args.dtype, rel_tol)
 
     gold_by_id: dict[str, str] = {}
     bank = Path(args.data_path)

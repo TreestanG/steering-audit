@@ -20,7 +20,7 @@ from steer_audit import (
     scan_vocab,
     steering_delta,
 )
-from utils import DTYPES, load_model, pick_device
+from utils import DTYPES, add_model_args, load_model, model_device
 
 
 logger = get_logger(__name__)
@@ -179,8 +179,7 @@ def summarize_localization(rows: list[dict]) -> None:
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
-    p.add_argument("--device", type=str, default=pick_device())
-    p.add_argument("--dtype", type=str, default="float32", choices=list(DTYPES))
+    add_model_args(p)
     p.add_argument("--train_path", type=str, default="data/sentiment_opposites_train.json")
     p.add_argument("--test_path", type=str, default="data/sentiment_opposites_test.json")
     p.add_argument("--fraction", type=float, default=0.1)
@@ -198,11 +197,9 @@ def main() -> None:
     args = p.parse_args()
     log_setup(args, default_log=logs_dir(args.model_name) / "recover.log")
 
-    model, _ = load_model(args.model_name, dtype=DTYPES[args.dtype])
-    steering = build_steering_vectors(load_pairs(args.train_path))  # before device move
-
-    model.to(args.device)
-    logger.info("model on %s", next(model.parameters()).device)
+    model, _ = load_model(args.model_name, dtype=DTYPES[args.dtype], device=args.device)
+    logger.info("model on %s, %s", model_device(), args.dtype)
+    steering = build_steering_vectors(load_pairs(args.train_path))  # CPU fp32, see there
 
     n_layers = model.config.num_hidden_layers
     layers = sorted(int(s) for s in args.layers.split(",")) if args.layers else list(range(1, n_layers + 1))

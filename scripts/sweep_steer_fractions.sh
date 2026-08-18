@@ -15,8 +15,9 @@ Sweep src/steer_audit.py over steering strengths, then overlay them on one figur
   --no_plot            run the audits, skip the figure
   --dry_run            print the planned runs and exit
 
-Everything else is forwarded to steer_audit.py. Each fraction pays for its own
-full-vocabulary scan, so wall clock is linear in the number of fractions.
+Everything else is forwarded to steer_audit.py -- including --device and --dtype.
+Each fraction pays for its own full-vocabulary scan, so wall clock is linear in
+the number of fractions.
 EOF
 }
 

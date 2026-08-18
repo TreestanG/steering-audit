@@ -14,7 +14,8 @@ Sweep SipIt across every hidden-state layer on a stratified subset of the bank.
   --out_dir DIR     default: results/<slug>/sipit/layers (from sipit.py)
   --dry_run         print selected ids and exit
 
-Everything else is forwarded to eval_sipit_single.sh (and then sipit.py).
+Everything else is forwarded to eval_sipit_single.sh (and then sipit.py),
+--device and --dtype included.
 EOF
 }
 

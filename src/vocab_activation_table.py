@@ -5,7 +5,7 @@ import torch
 from log import add_logging_args, get_logger, heartbeat
 from log import setup as log_setup
 from paths import activations_dir, logs_dir
-from utils import DTYPES, load_model, pick_device
+from utils import DTYPES, add_model_args, load_model, model_device
 
 
 logger = get_logger(__name__)
@@ -16,15 +16,13 @@ def main():
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
     parser.add_argument("--output_dir", type=str, default="data/activations")
     parser.add_argument("--batch_size", type=int, default=512)
-    parser.add_argument("--dtype", type=str, default="float32", choices=list(DTYPES))
-    parser.add_argument("--device", type=str, default=pick_device())
+    add_model_args(parser)
     add_logging_args(parser)
     args = parser.parse_args()
     log_setup(args, default_log=logs_dir(args.model_name) / "vocab.log")
 
-    model, _ = load_model(args.model_name, dtype=DTYPES[args.dtype])
-    model.to(args.device)
-    device = next(model.parameters()).device
+    model, _ = load_model(args.model_name, dtype=DTYPES[args.dtype], device=args.device)
+    device = model_device()
     logger.info("model on %s, %s", device, args.dtype)
     vocab_size = int(model.config.vocab_size)
     hidden = int(model.config.hidden_size)

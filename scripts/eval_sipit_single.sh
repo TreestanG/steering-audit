@@ -16,7 +16,8 @@ Chosen by this script (not forwarded):
   --out_dir DIR     with --all_layers: default results/<slug>/sipit/layers
 
 --act_path is chosen from --act_dir / --ids / --category / --limit.
-Everything else is forwarded to sipit.py; see its --help below.
+Everything else is forwarded to sipit.py -- --device and --dtype included;
+see its --help below.
 EOF
 }
 

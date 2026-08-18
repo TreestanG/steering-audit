@@ -9,7 +9,14 @@ import utils
 from log import add_logging_args, get_logger
 from log import setup as log_setup
 from paths import experiment_dir, logs_dir
-from utils import get_decoder_layers, get_token_activations, load_model
+from utils import (
+    DTYPES,
+    add_model_args,
+    get_decoder_layers,
+    get_token_activations,
+    load_model,
+    model_device,
+)
 
 logger = get_logger(__name__)
 
@@ -40,7 +47,10 @@ def build_steering_vectors(pairs, layers=None):
         stacked = torch.stack(differences[layer])
         direction = stacked.mean(dim=0)
         scale = torch.stack(residuals[layer]).norm(dim=1).mean()
-        out[layer] = (direction, scale)
+        # CPU fp32 regardless of where the model ran: these are analysis tensors,
+        # and steer_audit/steer_recover mix them with layer_states() output, which
+        # is always CPU fp32. The hooks move them onto the model at injection time.
+        out[layer] = (direction.float().cpu(), scale.float().cpu())
     return out
 
 
@@ -77,9 +87,10 @@ def make_random_vector_hook(scale, fraction):
 
 def last_token_logits(prompt):
     assert utils.model is not None and utils.tokenizer is not None
+    device = model_device()
     inputs = utils.tokenizer(prompt, return_tensors="pt")
     with torch.no_grad():
-        outputs = utils.model(**inputs)
+        outputs = utils.model(**{k: v.to(device) for k, v in inputs.items()})
     return outputs.logits[0, -1]
 
 
@@ -132,6 +143,10 @@ def main():
     parser.add_argument("--word_neg", type=str, default=" sad")
     parser.add_argument("--out", type=Path, default=None,
                         help="default: results/<slug>/sentiment/gaps.json")
+    # fp32 by default and deliberately: bfloat16's epsilon (~8e-3) is larger than
+    # the minimum inter-token state separation this measurement resolves, so a
+    # lower-precision run silently flattens the gaps it exists to report.
+    add_model_args(parser, default_dtype="float32")
     add_logging_args(parser)
     args = parser.parse_args()
     log_setup(args, default_log=logs_dir(args.model_name) / "sentiment.log")
@@ -139,7 +154,17 @@ def main():
         args.out = experiment_dir(args.model_name, "sentiment") / "gaps.json"
 
     fractions = [float(f) for f in args.fractions.split(",") if f]
-    load_model(args.model_name)
+    if args.dtype != "float32":
+        # Not refused: --dtype is the caller's decision and the pipeline forwards one
+        # dtype to every stage. But the gaps measured here are small enough that a
+        # low-precision run can report a flat curve that is entirely rounding.
+        logger.warning(
+            "--dtype %s: the logit gaps measured here are near this dtype's own "
+            "resolution (bf16 eps ~8e-3); float32 is the trustworthy setting",
+            args.dtype,
+        )
+    load_model(args.model_name, dtype=DTYPES[args.dtype], device=args.device)
+    logger.info("model on %s, %s", model_device(), args.dtype)
 
     train_pairs = load_pairs(args.train_path)
     test_pairs = load_pairs(args.test_path)

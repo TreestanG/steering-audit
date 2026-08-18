@@ -15,11 +15,12 @@ from log import setup as log_setup
 from paths import experiment_dir, logs_dir
 from utils import (
     DTYPES,
+    add_model_args,
     apply_final_norm,
     get_base_model,
     get_decoder_layers,
     load_model,
-    pick_device,
+    model_device,
     rel_tol_for,
     require_model,
 )
@@ -265,8 +266,7 @@ def summarize(rows: list[dict], layers: list[int]) -> None:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
-    parser.add_argument("--device", type=str, default=pick_device())
-    parser.add_argument("--dtype", type=str, default="float32", choices=list(DTYPES))
+    add_model_args(parser)
     parser.add_argument("--train_path", type=str, default="data/sentiment_opposites_train.json")
     parser.add_argument(
         "--test_path",
@@ -310,13 +310,12 @@ def main():
     rel_tol: float = (
         rel_tol_for(DTYPES[args.dtype]) if args.rel_tol is None else float(args.rel_tol)
     )
-    model, _ = load_model(args.model_name, dtype=DTYPES[args.dtype])
+    model, _ = load_model(args.model_name, dtype=DTYPES[args.dtype], device=args.device)
+    logger.info("model on %s, %s", model_device(), args.dtype)
 
-    # Built before the device move: get_token_activations feeds the model CPU tensors.
+    # Runs on --device; build_steering_vectors hands back CPU fp32 either way, which
+    # is what layer_states() returns and what every delta here is compared against.
     steering = build_steering_vectors(load_pairs(args.train_path))
-
-    model.to(args.device)
-    logger.info("model on %s", next(model.parameters()).device)
 
     layers = (
         [int(s) for s in args.layers.split(",")]

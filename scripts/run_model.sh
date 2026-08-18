@@ -27,7 +27,8 @@ Options:
   --full            real run sizes (default is a quick end-to-end validation)
   --force           re-run stages whose output already exists
   --dtype D         float32 (default) | float16 | bfloat16
-  --device D        cuda / mps / cpu (default: auto)
+  --device D        cuda / cuda:1 / mps / cpu (default: best available)
+                    Forwarded to every stage; each script also takes it directly.
   --no_plots        run the experiments, skip the figures
   --dry_run         print the planned commands and exit
 
@@ -161,12 +162,13 @@ stage sipit "$RES/sipit/layers/sipit_layer_00.jsonl" \
     scripts/eval_sipit_layers.sh --act_dir "$ACT_DIR" --n_prompts "$SIPIT_PROMPTS" \
         --model_name "$MODEL" --dtype "$DTYPE" ${DEVICE:+--device "$DEVICE"}
 stage sentiment "$RES/sentiment/gaps.json" \
-    uv run src/sentiment_dir.py --model_name "$MODEL" --fractions "$FRACTIONS"
+    uv run src/sentiment_dir.py "${COMMON[@]}" --fractions "$FRACTIONS"
 stage audit "$RES/steer/audit.jsonl" \
     uv run src/steer_audit.py "${COMMON[@]}" --n_prompts "$AUDIT_PROMPTS"
 stage fractions "$RES/steer/fractions/*.jsonl" \
     scripts/sweep_steer_fractions.sh --model_name "$MODEL" --fractions "$FRACTIONS" \
-        --n_prompts "$AUDIT_PROMPTS" --no_plot
+        --n_prompts "$AUDIT_PROMPTS" --no_plot \
+        --dtype "$DTYPE" ${DEVICE:+--device "$DEVICE"}
 stage recover "$RES/steer/recover.jsonl" \
     uv run src/steer_recover.py "${COMMON[@]}" --n_prompts "$RECOVER_PROMPTS" \
         --inject_layers "$INJECT"

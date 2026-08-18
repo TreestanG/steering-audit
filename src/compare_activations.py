@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from log import add_logging_args, get_logger
 from log import setup as log_setup
 from paths import figures_dir, logs_dir
-from utils import get_token_activations, load_model
+from utils import DTYPES, add_model_args, get_token_activations, load_model, model_device
 
 logger = get_logger(__name__)
 
@@ -65,11 +65,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
     parser.add_argument("--data_path", type=str, default="data/prompt_comparisons.json")
+    add_model_args(parser)
     add_logging_args(parser)
     args = parser.parse_args()
     log_setup(args, default_log=logs_dir(args.model_name) / "compare.log")
 
-    model, _ = load_model(args.model_name)
+    model, _ = load_model(args.model_name, dtype=DTYPES[args.dtype], device=args.device)
+    logger.info("model on %s, %s", model_device(), args.dtype)
     data = load_comparisons(args.data_path)
 
     n_layers = model.config.num_hidden_layers + 1  # embed + after each block

@@ -1,6 +1,7 @@
-from utils import get_token_activations, load_model
+from utils import get_token_activations, load_model, model_device, pick_device
 
-load_model("Qwen/Qwen2.5-0.5B-Instruct")
+load_model("Qwen/Qwen2.5-0.5B-Instruct", device=pick_device())
+print("model on", model_device())
 
 prompts = [
     "The food was delicious and I felt",
