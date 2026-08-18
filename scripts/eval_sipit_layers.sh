@@ -3,6 +3,21 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
+usage() {
+    cat <<'EOF'
+Sweep SipIt across every hidden-state layer on a stratified subset of the bank.
+
+  --act_dir DIR     default: data/activations/Qwen_Qwen2.5-0.5B-Instruct
+  --n_prompts N     default: 20, split evenly across categories
+  --category NAME   repeatable; only sample from these
+  --ids ID          skip sampling; invert these ids at every layer
+  --out_dir DIR     default: results/<act_dir basename>/layers
+  --dry_run         print selected ids and exit
+
+Everything else is forwarded to eval_sipit_single.sh (and then sipit.py).
+EOF
+}
+
 ACT_DIR=data/activations/Qwen_Qwen2.5-0.5B-Instruct
 N_PROMPTS=20
 OUT_DIR=
@@ -48,7 +63,7 @@ while [[ $# -gt 0 ]]; do
             exit 1
             ;;
         -h | --help)
-            sed -n '2,20p' "$0"
+            usage
             exit 0
             ;;
         *)
@@ -108,14 +123,12 @@ if [[ ${#IDS[@]} -eq 0 ]]; then
         echo "no activation files matched in $ACT_DIR" >&2
         exit 1
     fi
-    n_cats=0
-    for _ in $cats; do
-        n_cats=$((n_cats + 1))
-    done
+    read -r -a cat_list <<< "$cats"
+    n_cats=${#cat_list[@]}
     base=$((N_PROMPTS / n_cats))
     extra=$((N_PROMPTS % n_cats))
     idx=0
-    for cat in $cats; do
+    for cat in "${cat_list[@]}"; do
         take=$base
         [[ $idx -lt $extra ]] && take=$((take + 1))
         idx=$((idx + 1))

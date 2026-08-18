@@ -3,6 +3,23 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
+usage() {
+    cat <<'EOF'
+Run src/sipit.py over the trajectory-bank activations and tally exact recovery.
+
+Chosen by this script (not forwarded):
+  --act_dir DIR     default: data/activations/Qwen_Qwen2.5-0.5B-Instruct
+  --category NAME   repeatable (base64 code other_lang natural_en weird_clean)
+  --ids ID          repeatable, or comma-separated
+  --limit N
+  --out PATH        default: results/sipit.jsonl (single-layer)
+  --out_dir DIR     with --all_layers: sipit_layer_XX.jsonl per layer
+
+--act_path is chosen from --act_dir / --ids / --category / --limit.
+Everything else is forwarded to sipit.py; see its --help below.
+EOF
+}
+
 ACT_DIR=data/activations/Qwen_Qwen2.5-0.5B-Instruct
 OUT=results/sipit.jsonl
 OUT_SET=0
@@ -47,11 +64,11 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --act_path)
-            echo "eval_sipit.sh picks --act_path; use --ids / --category / --limit" >&2
+            echo "eval_sipit_single.sh picks --act_path; use --ids / --category / --limit" >&2
             exit 1
             ;;
         -h | --help)
-            sed -n '2,33p' "$0"
+            usage
             echo
             uv run src/sipit.py -h
             exit 0
@@ -98,7 +115,7 @@ fi
 # bash 3.2 + set -u treats "${arr[@]}" as unbound when arr is empty.
 if [[ $ALL_LAYERS -eq 1 ]]; then
     if [[ $OUT_SET -eq 1 ]]; then
-        echo "eval_sipit.sh: --all_layers writes per-layer jsonl; use --out_dir, not --out" >&2
+        echo "eval_sipit_single.sh: --all_layers writes per-layer jsonl; use --out_dir, not --out" >&2
         exit 1
     fi
     extra=(--all_layers)
@@ -107,7 +124,7 @@ if [[ $ALL_LAYERS -eq 1 ]]; then
     uv run src/sipit.py --act_path "${files[@]}" "${extra[@]}" ${SIPIT_ARGS[@]+"${SIPIT_ARGS[@]}"}
 else
     if [[ -n $OUT_DIR ]]; then
-        echo "eval_sipit.sh: --out_dir requires --all_layers" >&2
+        echo "eval_sipit_single.sh: --out_dir requires --all_layers" >&2
         exit 1
     fi
     echo "running SipIt on ${#files[@]} prompts -> $OUT"

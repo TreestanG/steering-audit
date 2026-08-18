@@ -3,6 +3,23 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
+usage() {
+    cat <<'EOF'
+Sweep src/steer_audit.py over steering strengths, then overlay them on one figure.
+
+  --fractions A,B,...  default: 0.01,0.02,0.05,0.1,0.2,0.5,1,2
+  --model_name NAME    default: Qwen/Qwen2.5-0.5B-Instruct (also picks results/<slug>/)
+  --out_dir DIR        default: results/<slug>/fractions
+  --plot_out PATH      default: results/<slug>/steer_fraction_sweep.png
+  --force              re-run fractions whose jsonl already exists
+  --no_plot            run the audits, skip the figure
+  --dry_run            print the planned runs and exit
+
+Everything else is forwarded to steer_audit.py. Each fraction pays for its own
+full-vocabulary scan, so wall clock is linear in the number of fractions.
+EOF
+}
+
 FRACTIONS_CSV=0.01,0.02,0.05,0.1,0.2,0.5,1,2
 MODEL_NAME=Qwen/Qwen2.5-0.5B-Instruct
 OUT_DIR=
@@ -54,7 +71,7 @@ while [[ $# -gt 0 ]]; do
             exit 1
             ;;
         -h | --help)
-            sed -n '2,30p' "$0"
+            usage
             exit 0
             ;;
         *)
