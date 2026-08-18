@@ -1,35 +1,3 @@
-"""Recover the injected steering vector from SipIt runs, and localize its layer.
-
-Built on steer_audit.py. Two experiments, both trading on the same identity:
-a steering delta is the difference between the observed state and the clean state
-of whatever token really produced it —
-
-    δ  =  h'_observed  −  h_clean
-
-and SipIt hands you both halves: h'_observed is the state it inverts, and once it
-recovers a token the clean state of *that* token is one more forward pass
-(sipit.candidate_states, the same states the vocab scan already compares against).
-
-  1. RECOVER  (recover_prompt)
-     Steer the last position at layer L, run the full-vocab scan on the steered
-     state, then subtract the recovered token's clean state:  δ̂ = h'_steer − ĥ.
-     We injected δ ourselves, so we can score the recovery directly:
-       cos(δ̂, δ)      direction fidelity   (→ 1 when SipIt recovers the true token)
-       ‖δ̂‖ / ‖δ‖      magnitude fidelity
-     Exact while the true token stays nearest; degrades only gracefully once the
-     steer flips the recovered token, because subtracting the wrong reference
-     costs an error on the scale of inter-token distances while ‖δ‖ at flip
-     strengths is far larger (measured: cos ≥ 0.83 even at fraction 2). The
-     norm-matched random direction rides along to show the method recovers *any*
-     injected vector, not just the sentiment one.
-
-  2. LOCALIZE  (localize_prompt)
-     Inject at ONE layer, then invert at every layer off a single forward pass.
-     Layers before the injection are untouched (residual at the numerical floor);
-     from the injection layer on, the state is off-manifold (residual lifts off).
-     The first layer to clear the floor is the injection layer.
-"""
-
 import argparse
 import json
 import sys
@@ -176,50 +144,69 @@ def localize_prompt(
     prompt: str,
     steering: dict[int, tuple[Tensor, Tensor]],
     *,
-    inject_layer: int,
+    inject_layers: list[int],
     layers: list[int],
     fraction: float,
     chunk: int,
     takeoff_mult: float,
-) -> dict:
-    """Inject at inject_layer; residual across layers takes off at the injection point."""
+) -> list[dict]:
+    """Inject at each of inject_layers; residual takes off at the injection point.
+
+    Every injection is scored in ONE vocab scan, and the clean side is forwarded
+    and scanned once: the clean profile depends only on the prompt, so computing
+    it per injection would repeat a full-vocabulary pass for an identical answer.
+    """
     model, tokenizer = utils.model, utils.tokenizer
     if model is None or tokenizer is None:
         raise RuntimeError("Call load_model(...) first")
 
     ids = tokenizer(prompt, return_tensors="pt")["input_ids"][0].tolist()
+    if len(ids) < 2:
+        raise ValueError(f"prompt tokenizes to {len(ids)} token(s); need >= 2")
     prefix = ids[:-1]
+    layers = sorted(layers)  # takeoff is "first layer to clear the floor"
 
-    direction, scale = steering[inject_layer]
-    delta = steering_delta(direction, scale, fraction)
-    steered = _forward_all_layers(prompt, inject_layer, delta, layers)
-    clean = _forward_all_layers(prompt, inject_layer, None, layers)
-
-    targets = {}
+    clean = _forward_all_layers(prompt, 0, None, layers)
+    steered = {}
+    targets: dict[tuple[int, str], Tensor] = {}
     for layer in layers:
-        targets[layer, "steer"] = steered[layer]
         targets[layer, "clean"] = clean[layer]
+    for inject in inject_layers:
+        direction, scale = steering[inject]
+        delta = steering_delta(direction, scale, fraction)
+        steered[inject] = _forward_all_layers(prompt, inject, delta, layers)
+        for layer in layers:
+            targets[layer, f"steer{inject}"] = steered[inject][layer]
+
     cache, _ = sipit.encode_step(torch.tensor([prefix]), cache=None, attn_len=len(prefix))
     tracked = scan_vocab(cache, len(prefix), targets, chunk)
 
-    rel_steer, rel_clean = {}, {}
-    for layer in layers:
-        rel_steer[layer] = tracked[layer, "steer"].best / float(steered[layer].norm())
-        rel_clean[layer] = tracked[layer, "clean"].best / float(clean[layer].norm())
-
+    rel_clean = {
+        L: tracked[L, "clean"].best / float(clean[L].norm()) for L in layers
+    }
     floor = max(rel_clean.values())
     thresh = max(takeoff_mult * floor, 1e-3)
-    takeoff = next((L for L in layers if rel_steer[L] > thresh), None)
-    return {
-        "prompt": prompt,
-        "inject_layer": inject_layer,
-        "takeoff": takeoff,
-        "correct": takeoff == inject_layer,
-        "floor": floor,
-        "thresh": thresh,
-        "rel_steer": {str(L): rel_steer[L] for L in layers},
-        "rel_clean": {str(L): rel_clean[L] for L in layers},
-    }
+
+    rows = []
+    for inject in inject_layers:
+        rel_steer = {
+            L: tracked[L, f"steer{inject}"].best / float(steered[inject][L].norm())
+            for L in layers
+        }
+        takeoff = next((L for L in layers if rel_steer[L] > thresh), None)
+        rows.append(
+            {
+                "prompt": prompt,
+                "inject_layer": inject,
+                "takeoff": takeoff,
+                "correct": takeoff == inject,
+                "floor": floor,
+                "thresh": thresh,
+                "rel_steer": {str(L): rel_steer[L] for L in layers},
+                "rel_clean": {str(L): rel_clean[L] for L in layers},
+            }
+        )
+    return rows
 
 
 def summarize_recovery(rows: list[dict], layers: list[int]) -> None:
@@ -290,8 +277,13 @@ def main() -> None:
     print(f"model on {next(utils.model.parameters()).device}")
 
     n_layers = utils.model.config.num_hidden_layers
-    layers = [int(s) for s in args.layers.split(",")] if args.layers else list(range(1, n_layers + 1))
-    inject_layers = [int(s) for s in args.inject_layers.split(",") if s]
+    layers = sorted(int(s) for s in args.layers.split(",")) if args.layers else list(range(1, n_layers + 1))
+    inject_layers = sorted(int(s) for s in args.inject_layers.split(",") if s)
+    # An injection at a layer that is never captured cannot be detected, so it
+    # would silently score as a miss rather than as the misconfiguration it is.
+    missing = [L for L in inject_layers if L not in layers]
+    if missing:
+        p.error(f"--inject_layers {missing} not in --layers {layers}")
     prompts = [neg for _, neg in load_pairs(args.test_path)][: args.n_prompts]
 
     slug = args.model_name.replace("/", "_")
@@ -317,13 +309,13 @@ def main() -> None:
     with loc_path.open("w") as f:
         for i, prompt in enumerate(prompts, start=1):
             t0 = time.time()
-            for inject in inject_layers:
-                row = localize_prompt(prompt, steering, inject_layer=inject, layers=layers,
-                                      fraction=args.fraction, chunk=args.chunk,
-                                      takeoff_mult=args.takeoff_mult)
+            got = localize_prompt(prompt, steering, inject_layers=inject_layers, layers=layers,
+                                  fraction=args.fraction, chunk=args.chunk,
+                                  takeoff_mult=args.takeoff_mult)
+            for row in got:
                 f.write(json.dumps(row) + "\n")
-                loc_rows.append(row)
             f.flush()
+            loc_rows.extend(got)
             print(f"[localize {i}/{len(prompts)}] {prompt!r} {time.time() - t0:.1f}s")
 
     summarize_recovery(rec_rows, layers)
