@@ -1,9 +1,9 @@
 import argparse
 import json
-from pathlib import Path
 
 import torch
 
+from paths import activations_dir
 from utils import get_token_activations, load_model
 
 
@@ -14,7 +14,7 @@ def main():
     parser.add_argument("--output_dir", type=str, default="data/activations")
     args = parser.parse_args()
 
-    out_dir = Path(args.output_dir) / args.model_name.replace("/", "_")
+    out_dir = activations_dir(args.model_name, args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     load_model(args.model_name)

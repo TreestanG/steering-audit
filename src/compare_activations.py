@@ -8,6 +8,7 @@ import torch.nn.functional as F
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from paths import model_slug
 from utils import get_token_activations, load_model
 
 def load_comparisons(path):
@@ -67,8 +68,9 @@ def main():
     data = load_comparisons(args.data_path)
 
     n_layers = model.config.num_hidden_layers + 1  # embed + after each block
-    model_dir = args.model_name.replace("/", "_")
-    graph_path = Path(args.results_dir) / model_dir / "final_token_average_similarity.png"
+    graph_path = (
+        Path(args.results_dir) / model_slug(args.model_name) / "final_token_average_similarity.png"
+    )
 
     all_similarities = {}
     for category, prompts in data.items():

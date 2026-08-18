@@ -1,8 +1,8 @@
 import argparse
-from pathlib import Path
 
 import torch
 
+from paths import activations_dir
 from utils import load_model
 
 
@@ -19,7 +19,7 @@ def main():
     hidden = int(model.config.hidden_size)
     n_layers = int(model.config.num_hidden_layers) + 1  # embed + after each block
 
-    out_dir = Path(args.output_dir) / args.model_name.replace("/", "_") / "vocab"
+    out_dir = activations_dir(args.model_name, args.output_dir) / "vocab"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "vocab_table.pt"
 
@@ -48,7 +48,6 @@ def main():
             table[start:end] = stacked.cpu()
             print(f"vocab {end}/{vocab_size}")
 
-        shape = tuple(table.shape)
         torch.save(
             {
                 "activations": table,
@@ -60,7 +59,7 @@ def main():
     finally:
         del table
         scratch.unlink(missing_ok=True)
-    print(f"Saved {shape} to {path}")
+    print(f"Saved {(vocab_size, n_layers, hidden)} to {path}")
 
 
 if __name__ == "__main__":
