@@ -3,7 +3,7 @@ import argparse
 import torch
 
 from paths import activations_dir
-from utils import load_model
+from utils import DTYPES, load_model
 
 
 def main():
@@ -11,9 +11,13 @@ def main():
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
     parser.add_argument("--output_dir", type=str, default="data/activations")
     parser.add_argument("--batch_size", type=int, default=512)
+    parser.add_argument("--dtype", type=str, default="float32", choices=list(DTYPES))
+    parser.add_argument("--device", type=str, default=None, help="default: CPU")
     args = parser.parse_args()
 
-    model, _ = load_model(args.model_name)
+    model, _ = load_model(args.model_name, dtype=DTYPES[args.dtype])
+    if args.device:
+        model.to(args.device)
     device = next(model.parameters()).device
     vocab_size = int(model.config.vocab_size)
     hidden = int(model.config.hidden_size)
@@ -52,6 +56,7 @@ def main():
             {
                 "activations": table,
                 "model_name": args.model_name,
+                "dtype": args.dtype,
                 "vocab_size": vocab_size,
             },
             path,

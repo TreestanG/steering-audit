@@ -12,11 +12,13 @@ from sentiment_dir import _steer_hidden, build_steering_vectors, load_pairs
 from sipit import Top2
 from paths import results_dir
 from utils import (
+    DTYPES,
     apply_final_norm,
     get_base_model,
     get_decoder_layers,
     load_model,
     pick_device,
+    rel_tol_for,
     require_model,
 )
 
@@ -257,6 +259,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
     parser.add_argument("--device", type=str, default=pick_device())
+    parser.add_argument("--dtype", type=str, default="float32", choices=list(DTYPES))
     parser.add_argument("--train_path", type=str, default="data/sentiment_opposites_train.json")
     parser.add_argument(
         "--test_path",
@@ -280,7 +283,7 @@ def main():
     parser.add_argument(
         "--rel_tol",
         type=float,
-        default=1e-3,
+        default=None,
         help="detection threshold: residual > rel_tol * ||h|| counts as caught",
     )
     parser.add_argument("--chunk", type=int, default=2048, help="candidates per forward")
@@ -295,7 +298,10 @@ def main():
     if args.out is None:
         args.out = results_dir(args.model_name) / "steer_audit.jsonl"
 
-    model, _ = load_model(args.model_name)
+    rel_tol: float = (
+        rel_tol_for(DTYPES[args.dtype]) if args.rel_tol is None else float(args.rel_tol)
+    )
+    model, _ = load_model(args.model_name, dtype=DTYPES[args.dtype])
 
     # Built before the device move: get_token_activations feeds the model CPU tensors.
     steering = build_steering_vectors(load_pairs(args.train_path))
@@ -321,7 +327,7 @@ def main():
                 steering,
                 layers=layers,
                 fraction=args.fraction,
-                rel_tol=args.rel_tol,
+                rel_tol=rel_tol,
                 chunk=args.chunk,
                 seed=args.seed,
             )

@@ -12,6 +12,21 @@ model: PreTrainedModel | None = None
 tokenizer: PreTrainedTokenizerBase | None = None
 
 
+DTYPES = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
+
+# Acceptance tolerance has to clear the dtype's own numerical floor, or every
+# position reports NO MATCH while having recovered the correct token. Measured
+# worst-case ||h_dtype - h_fp32|| / ||h_fp32|| on Qwen2.5-0.5B, doubled for margin:
+#   float32  5.0e-06   float16  4.5e-03   bfloat16  2.5e-02
+# Recovery itself is unaffected -- even bfloat16's floor is ~7% of gap/2 -- but
+# detection sensitivity scales with this, so a smaller dtype costs the weakest steers.
+DEFAULT_REL_TOL = {torch.float32: 1e-3, torch.float16: 1e-2, torch.bfloat16: 5e-2}
+
+
+def rel_tol_for(dtype: torch.dtype) -> float:
+    return DEFAULT_REL_TOL[dtype]
+
+
 def pick_device() -> str:
     if torch.cuda.is_available():
         return "cuda"
@@ -20,7 +35,9 @@ def pick_device() -> str:
     return "cpu"
 
 
-def load_model(model_name: str) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
+def load_model(
+    model_name: str, dtype: torch.dtype = torch.float32
+) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
     global model, tokenizer
     tokenizer = cast(PreTrainedTokenizerBase, AutoTokenizer.from_pretrained(model_name))
     
@@ -29,7 +46,7 @@ def load_model(model_name: str) -> tuple[PreTrainedModel, PreTrainedTokenizerBas
     
     model = cast(
         PreTrainedModel,
-        AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.float32),
+        AutoModelForCausalLM.from_pretrained(model_name, dtype=dtype),
     )
 
     model.eval()

@@ -3,17 +3,20 @@ import copy
 import json
 import time
 from pathlib import Path
+from typing import Any
 
 import torch
 from torch import Tensor
 
 from paths import vocab_table_path
 from utils import (
+    DTYPES,
     apply_final_norm,
     get_base_model,
     get_decoder_layers,
     load_model,
     pick_device,
+    rel_tol_for,
     require_model,
 )
 
@@ -62,7 +65,9 @@ def match_tol(target: Tensor, rel_tol: float, abs_tol: float) -> float:
     return rel_tol * float(target.norm())
 
 
-def load_vocab_table(path: str, expect_model: str | None = None) -> Tensor:
+def load_vocab_table(
+    path: str, expect_model: str | None = None, expect_dtype: str | None = None
+) -> Tensor:
     """[vocab, n_layers, hidden] solo-token states, mmapped so pages load on demand.
 
     Refuses a table built for a different model: the shapes are often compatible,
@@ -74,12 +79,17 @@ def load_vocab_table(path: str, expect_model: str | None = None) -> Tensor:
             f"Build it: uv run src/vocab_activation_table.py --model_name {expect_model or '<model>'}"
         )
     blob = torch.load(path, mmap=True, weights_only=False)
-    built_for = blob.get("model_name")
-    if expect_model and built_for and built_for != expect_model:
-        raise SystemExit(
-            f"{path} was built for {built_for!r}, not {expect_model!r}.\n"
-            f"Rebuild it: uv run src/vocab_activation_table.py --model_name {expect_model}"
-        )
+    # Tables built before --dtype existed are fp32: load_model hardcoded it.
+    for field, want, flag, fallback in (("model_name", expect_model, "--model_name", None),
+                                        ("dtype", expect_dtype, "--dtype", "float32")):
+        built = blob.get(field, fallback)
+        if want and built and built != want:
+            raise SystemExit(
+                f"{path} was built with {field}={built!r}, not {want!r}.\n"
+                f"Rebuild it: uv run src/vocab_activation_table.py "
+                f"--model_name {expect_model} --dtype {expect_dtype} "
+                f"(mismatched {flag} makes every residual meaningless)"
+            )
     return blob["activations"]
 
 
@@ -463,6 +473,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
     parser.add_argument("--device", type=str, default=pick_device())
+    parser.add_argument("--dtype", type=str, default="float32", choices=list(DTYPES))
     parser.add_argument(
         "--act_path",
         type=str,
@@ -491,10 +502,12 @@ def main():
     parser.add_argument(
         "--rel_tol",
         type=float,
-        default=1e-3,
+        default=None,
         help="accept a candidate whose L2 to the target is below rel_tol * ||target||. "
         "Relative because activation norms grow ~47x from layer 1 to 24, so a fixed "
-        "absolute threshold is a different standard at every depth.",
+        "absolute threshold is a different standard at every depth. "
+        "Default follows --dtype: fp32 1e-3, fp16 1e-2, bf16 5e-2 -- below the dtype's "
+        "own noise floor every position reports NO MATCH despite recovering the token.",
     )
     parser.add_argument(
         "--tol",
@@ -550,17 +563,20 @@ def main():
     schedule = tuple(int(s) for s in args.schedule.split(","))
 
     vocab_path = args.vocab_path or str(vocab_table_path(args.model_name))
-    model, tokenizer = load_model(args.model_name)
+    dtype = DTYPES[args.dtype]
+    rel_tol: float = rel_tol_for(dtype) if args.rel_tol is None else float(args.rel_tol)
+    model, tokenizer = load_model(args.model_name, dtype=dtype)
     model.to(args.device)
-    print(f"model on {next(model.parameters()).device}, dtype {next(model.parameters()).dtype}")
+    print(f"model on {next(model.parameters()).device}, dtype {next(model.parameters()).dtype}, "
+          f"rel_tol {rel_tol:g}")
 
     gold_by_id: dict[str, str] = {}
     bank = Path(args.data_path)
     if bank.exists():
         gold_by_id = {p["id"]: p["text"] for p in json.loads(bank.read_text())["prompts"]}
 
-    run_kw = dict(
-        rel_tol=args.rel_tol,
+    run_kw: dict[str, Any] = dict(
+        rel_tol=rel_tol,
         abs_tol=args.tol,
         schedule=schedule,
         exhaustive=args.exhaustive,
@@ -571,7 +587,8 @@ def main():
     # Opened once: re-loading per layer re-mmaps the whole table and re-materializes
     # a fresh [vocab, hidden] slice each time, for no gain over letting the page
     # cache serve the same mapping.
-    vocab_table = load_vocab_table(vocab_path, expect_model=args.model_name)
+    vocab_table = load_vocab_table(vocab_path, expect_model=args.model_name,
+                                   expect_dtype=args.dtype)
 
     if args.all_layers:
         n_layers = n_layers_in(args.act_path[0])
