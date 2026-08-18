@@ -1,21 +1,17 @@
 import argparse
 import copy
 import json
-import sys
 import time
 from pathlib import Path
 
-import numpy as np
 import torch
 from torch import Tensor
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
 import sipit
-import utils
 from sentiment_dir import _steer_hidden, build_steering_vectors, load_pairs
 from sipit import Top2
-from utils import get_decoder_layers, load_model
+from paths import results_dir
+from utils import apply_final_norm, get_base_model, get_decoder_layers, load_model, require_model
 
 
 def steering_delta(direction: Tensor, scale: Tensor, fraction: float) -> Tensor:
@@ -38,26 +34,38 @@ def make_delta_hook(delta: Tensor):
 
 
 @torch.no_grad()
-def layer_state(prompt: str, layer: int, hook_fn=None) -> Tensor:
-    """Hidden state at `layer` for the last position, under an optional steering hook.
+def layer_states(prompt: str, layers: list[int], hook_layer: int = 0, hook_fn=None,
+                 post_norm: bool = True) -> dict[int, Tensor]:
+    """Last-position hidden state at each of `layers`, from one forward pass.
 
     Runs the real perturbed forward rather than adding delta to a clean state: at the
     final block the model's own norm is applied after the hook, so the two differ there.
+
+    post_norm=False returns the raw block output at the last layer instead of the
+    model's post-norm state — what you want when comparing a block's output to
+    itself, since the norm is nonlinear and would break `steered - base == delta`.
+
+    States are captured straight off block L-1 rather than from out.hidden_states,
+    because a forward hook that rewrites a block's output is not reflected in that
+    block's own hidden_states slot — HF fills the slot before the rewrite propagates,
+    which would place an injection one layer late.
     """
-    model, tokenizer = utils.model, utils.tokenizer
-    if model is None or tokenizer is None:
-        raise RuntimeError("Call load_model(...) first")
-    captured: dict[str, Tensor] = {}
+    model, tokenizer = require_model()
+    blocks = get_decoder_layers()
+    captured: dict[int, Tensor] = {}
 
-    def capture(module, input, output):
-        out = output[0] if isinstance(output, tuple) else output
-        captured["act"] = out[0, -1].detach().clone()
+    def make_capture(layer: int):
+        def capture(module, input, output):
+            out = output[0] if isinstance(output, tuple) else output
+            captured[layer] = out[0, -1].detach().clone()
 
-    block = get_decoder_layers()[layer - 1]
+        return capture
+
     handles = []
     if hook_fn is not None:  # registered first, so `capture` sees the steered output
-        handles.append(block.register_forward_hook(hook_fn))
-    handles.append(block.register_forward_hook(capture))
+        handles.append(blocks[hook_layer - 1].register_forward_hook(hook_fn))
+    for layer in layers:
+        handles.append(blocks[layer - 1].register_forward_hook(make_capture(layer)))
 
     device = next(model.parameters()).device
     inputs = tokenizer(prompt, return_tensors="pt")
@@ -67,10 +75,50 @@ def layer_state(prompt: str, layer: int, hook_fn=None) -> Tensor:
         for h in handles:
             h.remove()
 
-    h = captured["act"]
-    if layer == model.config.num_hidden_layers:
-        h = model.model.norm(h)  # match sipit.candidate_states: last layer is post-norm
-    return h.float().cpu()
+    # match sipit.candidate_states: the last layer is post-norm
+    finish = apply_final_norm if post_norm else (lambda h, _L: h)
+    return {L: finish(captured[L], L).float().cpu() for L in layers}
+
+
+def layer_state(prompt: str, layer: int, hook_fn=None, post_norm: bool = True) -> Tensor:
+    """Single-layer `layer_states`, hooking the same block it captures."""
+    return layer_states(prompt, [layer], hook_layer=layer, hook_fn=hook_fn,
+                        post_norm=post_norm)[layer]
+
+
+def prefix_cache(prompt: str):
+    """(prefix ids, true last-token id, KV cache for the prefix) — the setup every
+    vocab scan needs. The last token is what the scan tries to recover."""
+    _, tokenizer = require_model()
+    ids = tokenizer(prompt, return_tensors="pt")["input_ids"][0].tolist()
+    if len(ids) < 2:
+        raise ValueError(f"prompt tokenizes to {len(ids)} token(s); need >= 2")
+    prefix, true_id = ids[:-1], ids[-1]
+    cache, _ = sipit.encode_step(torch.tensor([prefix]), cache=None, attn_len=len(prefix))
+    return prefix, true_id, cache
+
+
+@torch.no_grad()
+def build_targets(prompt: str, steering: dict[int, tuple[Tensor, Tensor]], *,
+                  layers: list[int], fraction: float, seed: int):
+    """Clean / steered / random targets at every layer, plus the deltas injected.
+
+    The clean states all come from one forward pass; only the steered and random
+    ones need a hooked forward per layer, since each layer gets its own delta.
+    """
+    model, _ = require_model()
+    clean = layer_states(prompt, layers)
+    targets: dict[tuple[int, str], Tensor] = {}
+    deltas: dict[int, dict[str, Tensor]] = {}
+    for layer in layers:
+        direction, scale = steering[layer]
+        d_steer = steering_delta(direction, scale, fraction)
+        d_rand = random_delta(model.config.hidden_size, scale, fraction, seed)
+        deltas[layer] = {"steer": d_steer, "rand": d_rand}
+        targets[layer, "clean"] = clean[layer]
+        targets[layer, "steer"] = layer_state(prompt, layer, make_delta_hook(d_steer))
+        targets[layer, "rand"] = layer_state(prompt, layer, make_delta_hook(d_rand))
+    return targets, deltas
 
 
 @torch.no_grad()
@@ -81,15 +129,18 @@ def scan_vocab(cache, prefix_len: int, targets: dict[tuple[int, str], Tensor], c
     output_hidden_states serves every layer and every target at once — the alternative
     (sipit.candidate_states per layer) recomputes the same states once per depth.
     """
-    model = utils.model
-    if model is None:
-        raise RuntimeError("Call load_model(...) first")
+    model, _ = require_model()
     device = next(model.parameters()).device
     vocab_size = int(model.config.vocab_size)
-    layers = sorted({layer for layer, _ in targets})
+
+    # Grouped once: the layer -> targets mapping is loop-invariant, and rescanning
+    # every target per layer per chunk is O(layers x targets) work for nothing.
+    by_layer: dict[int, list[tuple[tuple[int, str], Tensor]]] = {}
+    for key, target in targets.items():
+        by_layer.setdefault(key[0], []).append((key, target))
 
     # Same KV budget sipit uses: expanding the prefix cache per candidate is what blows up.
-    cap = max(256, min(chunk, sipit.KV_BUDGET_BYTES // max(1, sipit.kv_bytes_per_token() * prefix_len)))
+    cap = sipit.batch_cap(prefix_len, chunk)
     tracked = {key: Top2() for key in targets}
 
     for start in range(0, vocab_size, cap):
@@ -97,17 +148,16 @@ def scan_vocab(cache, prefix_len: int, targets: dict[tuple[int, str], Tensor], c
         n = cands.shape[0]
         batch_cache = copy.deepcopy(cache)
         batch_cache.batch_repeat_interleave(n)
-        out = model.model(
+        out = get_base_model()(
             input_ids=cands.view(-1, 1).to(device),
             attention_mask=torch.ones(n, prefix_len + 1, dtype=torch.long, device=device),
             past_key_values=batch_cache,
             output_hidden_states=True,
         )
-        for layer in layers:
+        for layer, entries in by_layer.items():
             states = out.hidden_states[layer][:, 0].float().cpu()
-            for key, target in targets.items():
-                if key[0] == layer:
-                    tracked[key].update((states - target).norm(dim=1), cands)
+            for key, target in entries:
+                tracked[key].update((states - target).norm(dim=1), cands)
         del out
 
     return tracked
@@ -125,27 +175,8 @@ def audit_prompt(
     seed: int,
 ) -> list[dict]:
     """Clean/steered/random targets at every layer, scored against one shared vocab scan."""
-    model, tokenizer = utils.model, utils.tokenizer
-    if model is None or tokenizer is None:
-        raise RuntimeError("Call load_model(...) first")
-
-    ids = tokenizer(prompt, return_tensors="pt")["input_ids"][0].tolist()
-    if len(ids) < 2:
-        raise ValueError(f"prompt tokenizes to {len(ids)} token(s); need >= 2")
-    prefix, true_id = ids[:-1], ids[-1]
-
-    targets: dict[tuple[int, str], Tensor] = {}
-    deltas: dict[int, dict[str, Tensor]] = {}
-    for layer in layers:
-        direction, scale = steering[layer]
-        d_steer = steering_delta(direction, scale, fraction)
-        d_rand = random_delta(model.config.hidden_size, scale, fraction, seed)
-        deltas[layer] = {"steer": d_steer, "rand": d_rand}
-        targets[layer, "clean"] = layer_state(prompt, layer)
-        targets[layer, "steer"] = layer_state(prompt, layer, make_delta_hook(d_steer))
-        targets[layer, "rand"] = layer_state(prompt, layer, make_delta_hook(d_rand))
-
-    cache, _ = sipit.encode_step(torch.tensor([prefix]), cache=None, attn_len=len(prefix))
+    prefix, true_id, cache = prefix_cache(prompt)
+    targets, deltas = build_targets(prompt, steering, layers=layers, fraction=fraction, seed=seed)
     tracked = scan_vocab(cache, len(prefix), targets, chunk)
 
     rows = []
@@ -254,23 +285,21 @@ def main():
     )
     args = parser.parse_args()
     if args.out is None:
-        args.out = Path(f"results/{args.model_name.replace('/', '_')}/steer_audit.jsonl")
+        args.out = results_dir(args.model_name) / "steer_audit.jsonl"
 
-    load_model(args.model_name)
-    if utils.model is None:
-        raise RuntimeError("load_model(...) did not set utils.model")
+    model, _ = load_model(args.model_name)
 
     # Built before the device move: get_token_activations feeds the model CPU tensors.
     steering = build_steering_vectors(load_pairs(args.train_path))
 
     device = "mps" if torch.backends.mps.is_available() else "cpu"
-    utils.model.to(device)
-    print(f"model on {next(utils.model.parameters()).device}")
+    model.to(device)
+    print(f"model on {next(model.parameters()).device}")
 
     layers = (
         [int(s) for s in args.layers.split(",")]
         if args.layers
-        else list(range(1, utils.model.config.num_hidden_layers + 1))
+        else list(range(1, model.config.num_hidden_layers + 1))
     )
     prompts = [neg for _, neg in load_pairs(args.test_path)][: args.n_prompts]
     print(f"{len(prompts)} prompts x {len(layers)} layers, fraction={args.fraction}")
