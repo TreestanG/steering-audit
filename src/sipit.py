@@ -1,11 +1,3 @@
-"""SipIt — exact prompt recovery from hidden activations.
-
-Nikolaou et al., "Language Models are Injective and Hence Invertible" (arXiv 2510.15511).
-Causal masking makes h_t a function of s_1..s_t only, so each position is a
-vocabulary scan given the pinned prefix. Injectivity means the first exact
-match is the answer.
-"""
-
 import argparse
 import copy
 import json
@@ -60,10 +52,14 @@ def match_tol(target: Tensor, rel_tol: float, abs_tol: float) -> float:
     return rel_tol * float(target.norm())
 
 
-def load_vocab_layer(path: str, layer: int) -> Tensor:
-    """[vocab, hidden] solo-token states at one layer, mmap-sliced from the big table."""
-    blob = torch.load(path, mmap=True, weights_only=False)
-    return blob["activations"][:, layer, :].contiguous()
+def load_vocab_table(path: str) -> Tensor:
+    """[vocab, n_layers, hidden] solo-token states, mmapped so pages load on demand."""
+    return torch.load(path, mmap=True, weights_only=False)["activations"]
+
+
+def load_vocab_layer(table: Tensor, layer: int) -> Tensor:
+    """[vocab, hidden] slice at one layer. Materializes ~‖V‖x hidden floats."""
+    return table[:, layer, :].contiguous()
 
 
 def dists_to(vec: Tensor, table: Tensor, chunk: int = 8192) -> Tensor:
@@ -72,6 +68,29 @@ def dists_to(vec: Tensor, table: Tensor, chunk: int = 8192) -> Tensor:
     for start in range(0, table.shape[0], chunk):
         out[start : start + chunk] = (table[start : start + chunk] - vec).norm(dim=1)
     return out
+
+
+class Top2:
+    """Two smallest distances seen so far, over a chunked scan."""
+
+    def __init__(self) -> None:
+        self.best = float("inf")
+        self.best_id = -1
+        self.runner = float("inf")
+
+    def update(self, d: Tensor, ids: Tensor) -> None:
+        # The global top-2 must appear in some chunk's top-2, so merging per-chunk
+        # pairs is exact and avoids keeping a |V|-long distance vector around.
+        top = torch.topk(d, k=min(2, d.shape[0]), largest=False)
+        for dist, idx in zip(top.values.tolist(), top.indices.tolist()):
+            if dist < self.best:
+                self.runner, self.best, self.best_id = self.best, dist, int(ids[idx])
+            elif dist < self.runner:
+                self.runner = dist
+
+    @property
+    def gap(self) -> float:
+        return self.runner - self.best
 
 
 class _EarlyExit(Exception):
@@ -162,7 +181,8 @@ def solve_position(
     tol = match_tol(target, rel_tol, abs_tol)
     order = torch.argsort(logits[:vocab_size], descending=True)
 
-    best_d, best_id, runner_d, tried = float("inf"), -1, float("inf"), 0
+    top2 = Top2()
+    tried = 0
     start = 0
     for size in batch_sizes(schedule, vocab_size, prefix_len):
         if start >= vocab_size:
@@ -171,26 +191,25 @@ def solve_position(
         cands = order[start:end]
         d = (candidate_states(cache, prefix_len, cands, layer) - target).norm(dim=1)
         tried += cands.shape[0]
-
-        top2 = torch.topk(d, k=min(2, d.shape[0]), largest=False)
-        for dist, idx in zip(top2.values.tolist(), top2.indices.tolist()):
-            if dist < best_d:
-                runner_d, best_d, best_id = best_d, dist, int(cands[idx])
-            elif dist < runner_d:
-                runner_d = dist
+        top2.update(d, cands)
 
         start = end
-        if best_d <= tol and not exhaustive:
+        if top2.best <= tol and not exhaustive:
             break
 
-    gap = runner_d - best_d
+    best_d, runner_d, gap = top2.best, top2.runner, top2.gap
     return {
-        "token": best_id,
+        "token": top2.best_id,
         "residual": best_d,
-        "runner_up": runner_d,  # true runner-up only when exhaustive
+        "runner_up": runner_d,
         "gap": gap,
         "ratio": best_d / gap if gap > 0 else float("inf"),  # Thm 3.2: recovery guaranteed if residual < gap/2
+        # A partial scan's runner-up can only be farther than the true one, so
+        # gap is an over-estimate and ratio an under-estimate unless this is set.
+        # Downstream plots need it to know whether the Thm 3.2 margin is real.
+        "gap_exhaustive": tried >= vocab_size,
         "tol": tol,
+        "h_norm": float(target.norm()),  # so ‖h‖ survives an absolute --tol run
         "tried": tried,
         "matched": best_d <= tol,
     }
@@ -223,7 +242,9 @@ def sipit(
             "runner_up": float(top2.values[1]),
             "gap": gap0,
             "ratio": best / gap0 if gap0 > 0 else float("inf"),
+            "gap_exhaustive": True,  # position 0 is a full table lookup
             "tol": tol0,
+            "h_norm": float(target[0].norm()),
             "tried": vocab_layer.shape[0],
             "matched": best <= tol0,
         }
@@ -278,7 +299,10 @@ def invert_file(
     if noise:
         g = torch.Generator().manual_seed(0)
         v = torch.randn(target.shape[-1], generator=g)
-        target = target + noise * v / v.norm()
+        # t=0 is scored against the exact vocab table, so any perturbation there
+        # fails to match and stop_on_fail ends the run before a single forward
+        # pass. Perturb t>0 only, which is also where a steer would land.
+        target = torch.cat([target[:1], target[1:] + noise * v / v.norm()])
 
     start = time.time()
     steps = sipit(
@@ -333,7 +357,9 @@ def invert_file(
                 "residual": s["residual"],
                 "gap": s["gap"],
                 "ratio": s["ratio"],
+                "gap_exhaustive": s["gap_exhaustive"],
                 "tol": s["tol"],
+                "h_norm": s["h_norm"],
                 "tried": s["tried"],
                 "matched": s["matched"],
             }
@@ -469,7 +495,9 @@ def main():
         "--noise",
         type=float,
         default=0.0,
-        help="add a random vector of this L2 norm to the target — a steering stand-in",
+        help="add a random vector of this L2 norm to target positions t>0 — a "
+        "steering stand-in. t=0 is left clean because it is matched against the "
+        "exact vocab table, so perturbing it just trips --stop_on_fail.",
     )
     parser.add_argument(
         "--exhaustive",
@@ -524,6 +552,11 @@ def main():
         max_len=args.max_len,
         noise=args.noise,
     )
+    # Opened once: re-loading per layer re-mmaps the whole table and re-materializes
+    # a fresh [vocab, hidden] slice each time, for no gain over letting the page
+    # cache serve the same mapping.
+    vocab_table = load_vocab_table(args.vocab_path)
+
     if args.all_layers:
         n_layers = n_layers_in(args.act_path[0])
         last = n_layers - 1
@@ -533,7 +566,7 @@ def main():
         for layer in range(n_layers):
             out = out_dir / f"sipit_layer_{layer:02d}.jsonl" if out_dir else None
             print(f"======== layer {layer} / {last} -> {out} ========")
-            vocab_layer = load_vocab_layer(args.vocab_path, layer)
+            vocab_layer = load_vocab_layer(vocab_table, layer)
             n, ok = run_layer(
                 args.act_path, tokenizer, vocab_layer, gold_by_id,
                 layer=layer, out=out, **run_kw,
@@ -545,7 +578,7 @@ def main():
         return
 
     layer = 12 if args.layer is None else args.layer
-    vocab_layer = load_vocab_layer(args.vocab_path, layer)
+    vocab_layer = load_vocab_layer(vocab_table, layer)
     run_layer(
         args.act_path,
         tokenizer,

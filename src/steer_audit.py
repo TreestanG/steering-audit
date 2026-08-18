@@ -14,30 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sipit
 import utils
 from sentiment_dir import _steer_hidden, build_steering_vectors, load_pairs
+from sipit import Top2
 from utils import get_decoder_layers, load_model
-
-
-class Top2:
-    """Two smallest distances seen so far, over a chunked scan."""
-
-    def __init__(self) -> None:
-        self.best = float("inf")
-        self.best_id = -1
-        self.runner = float("inf")
-
-    def update(self, d: Tensor, ids: Tensor) -> None:
-        # The global top-2 must appear in some chunk's top-2, so merging per-chunk
-        # pairs is exact and avoids keeping a |V|-long distance vector around.
-        top = torch.topk(d, k=min(2, d.shape[0]), largest=False)
-        for dist, idx in zip(top.values.tolist(), top.indices.tolist()):
-            if dist < self.best:
-                self.runner, self.best, self.best_id = self.best, dist, int(ids[idx])
-            elif dist < self.runner:
-                self.runner = dist
-
-    @property
-    def gap(self) -> float:
-        return self.runner - self.best
 
 
 def steering_delta(direction: Tensor, scale: Tensor, fraction: float) -> Tensor:
@@ -268,8 +246,15 @@ def main():
     )
     parser.add_argument("--chunk", type=int, default=2048, help="candidates per forward")
     parser.add_argument("--seed", type=int, default=42, help="random control direction")
-    parser.add_argument("--out", type=Path, default=Path("results/steer_audit.jsonl"))
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="default: results/<model-slug>/steer_audit.jsonl, where plot_steer_audit.py looks",
+    )
     args = parser.parse_args()
+    if args.out is None:
+        args.out = Path(f"results/{args.model_name.replace('/', '_')}/steer_audit.jsonl")
 
     load_model(args.model_name)
     if utils.model is None:
