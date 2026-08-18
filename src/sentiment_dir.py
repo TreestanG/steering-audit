@@ -62,8 +62,9 @@ def make_add_vector_hook(direction, scale, fraction):
 
 
 def make_random_vector_hook(scale, fraction):
-    np.random.seed(42)
-    v = torch.from_numpy(np.random.randn(model.config.hidden_size)).float()
+    assert utils.model is not None
+    rng = np.random.default_rng(42)  # local RNG: don't reseed numpy's global one
+    v = torch.from_numpy(rng.standard_normal(utils.model.config.hidden_size)).float()
 
     def add_random_vector(module, input, output):
         delta = fraction * scale * v / v.norm()
@@ -111,8 +112,7 @@ def main():
     parser.add_argument("--out", type=Path, default=Path("results/sentiment_gaps.json"))
     args = parser.parse_args()
 
-    global model, tokenizer
-    model, tokenizer = load_model(args.model_name)
+    load_model(args.model_name)
 
     train_pairs = load_pairs(args.train_path)
     test_pairs = load_pairs(args.test_path)
