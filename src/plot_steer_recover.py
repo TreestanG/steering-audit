@@ -1,18 +1,3 @@
-"""Plot the steering-vector recovery and layer-localization from steer_recover.py.
-
-Reads results/<slug>/steer_recover.jsonl and steer_localize.jsonl. Four panels:
-
-  A  Recovery direction — cos(δ̂, δ) vs layer, with margin_spent on a twin axis.
-     The story is the contrast: cos stays pinned at 1 while the margin spent
-     climbs past the Thm 3.2 bound, so recovery of the vector holds well beyond
-     where the guarantee stops.
-  B  Recovery magnitude — ‖δ̂‖/‖δ‖ vs layer. Flat at 1 until the final post-norm
-     layer, where δ (injected pre-norm) is no longer directly observable.
-  C  Localization staircase — residual vs layer, one curve per injection layer.
-     Each sits on the numerical floor until its injection layer, then lifts off.
-  D  Localization check — detected takeoff vs injected layer against identity.
-"""
-
 import argparse
 import json
 from pathlib import Path

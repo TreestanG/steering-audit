@@ -1,23 +1,3 @@
-"""Overlay every steering strength from a sweep_steer_fractions.sh run.
-
-plot_steer_audit.py shows one fraction across depth. This shows the family: the
-same four measurements, one curve per steering strength, so the depth effect and
-the magnitude effect can be read off the same axes.
-
-  A  Margin spent (residual/gap) vs depth, one curve per fraction. Thm 3.2
-     guarantees exact recovery only below 0.5, so a curve is "safe" while it
-     stays under the line. Weak steers stay under it everywhere; strong ones
-     start above it at layer 1.
-  B  What actually happens: steered recovery rate vs depth. Panel A is the
-     guarantee, this is the outcome — recovery survives well past the bound
-     because the true token stays nearest even on a spent margin.
-  C  Residual / ‖h‖ vs depth. Flat at ~fraction by construction (the hook adds
-     fraction·‖h‖-scaled mass), which is what makes A's rise a gap-collapse
-     result rather than a growing-perturbation one.
-  D  Safe depth vs fraction: the first layer where the mean margin crosses 0.5.
-     The depth at which a steer becomes unguaranteed falls as it gets stronger.
-"""
-
 import argparse
 import json
 import re

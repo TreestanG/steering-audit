@@ -1,5 +1,3 @@
-"""Build data/trajectory_bank_prompts.json from hand-authored buckets + TinyStories sample."""
-
 from __future__ import annotations
 
 import argparse

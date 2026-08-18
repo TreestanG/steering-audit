@@ -1,36 +1,4 @@
 #!/usr/bin/env bash
-# Run src/sipit.py over the trajectory-bank activations and tally exact recovery.
-#
-# File selection (this script; not forwarded):
-#   --act_dir DIR     default: data/activations/Qwen_Qwen2.5-0.5B-Instruct
-#   --category NAME   repeatable (base64 code other_lang natural_en weird_clean)
-#   --ids ID          repeatable, or comma-separated
-#   --limit N
-#   --out PATH        default: results/sipit.jsonl (single-layer)
-#   --out_dir DIR     with --all_layers: sipit_layer_XX.jsonl per layer
-#
-# Forwarded to sipit.py:
-#   --model_name NAME     default: Qwen/Qwen2.5-0.5B-Instruct
-#   --vocab_path PATH     default: data/activations/Qwen_Qwen2.5-0.5B-Instruct/vocab/vocab_table.pt
-#   --layer N             default: 12
-#   --all_layers          sweep every hidden-state layer in the activation tensor
-#   --tol FLOAT           default: 1e-2
-#   --schedule A,B,...    default: 32,96,384,1536,6144,24576
-#   --max_len N           default: 0 (whole sequence)
-#   --noise FLOAT         default: 0.0
-#   --exhaustive          scan all |V| per position
-#   --no_stop_on_fail
-#   --data_path PATH      default: data/trajectory_bank_prompts.json
-#
-# --act_path is chosen by this script from --act_dir / --ids / --category / --limit.
-#
-# Examples:
-#   scripts/eval_sipit.sh
-#   scripts/eval_sipit.sh --category code --limit 5
-#   scripts/eval_sipit.sh --ids code_0001,base64_0001 --layer 12 --max_len 8
-#   scripts/eval_sipit.sh --out results/sipit_code.jsonl --category code --schedule 32,96,384
-#   scripts/eval_sipit.sh --ids code_0001 --all_layers --out_dir results/Qwen_Qwen2.5-0.5B-Instruct/layers
-
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
