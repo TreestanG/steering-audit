@@ -7,7 +7,15 @@ from pathlib import Path
 import torch
 from torch import Tensor
 
-from utils import apply_final_norm, get_base_model, get_decoder_layers, load_model, require_model
+from paths import vocab_table_path
+from utils import (
+    apply_final_norm,
+    get_base_model,
+    get_decoder_layers,
+    load_model,
+    pick_device,
+    require_model,
+)
 
 # Widen on a miss: true tokens usually rank near the top of next-token order.
 DEFAULT_SCHEDULE: tuple[int, ...] = (32, 96, 384, 1536, 6144, 24576)
@@ -22,7 +30,8 @@ def kv_bytes_per_token() -> int:
     model, _ = require_model()
     cfg = model.config
     head_dim = getattr(cfg, "head_dim", cfg.hidden_size // cfg.num_attention_heads)
-    return cfg.num_hidden_layers * 2 * cfg.num_key_value_heads * head_dim * 4
+    kv_heads = getattr(cfg, "num_key_value_heads", None) or cfg.num_attention_heads
+    return cfg.num_hidden_layers * 2 * kv_heads * head_dim * 4
 
 
 def batch_cap(prefix_len: int, max_batch: int = MAX_BATCH) -> int:
@@ -53,9 +62,25 @@ def match_tol(target: Tensor, rel_tol: float, abs_tol: float) -> float:
     return rel_tol * float(target.norm())
 
 
-def load_vocab_table(path: str) -> Tensor:
-    """[vocab, n_layers, hidden] solo-token states, mmapped so pages load on demand."""
-    return torch.load(path, mmap=True, weights_only=False)["activations"]
+def load_vocab_table(path: str, expect_model: str | None = None) -> Tensor:
+    """[vocab, n_layers, hidden] solo-token states, mmapped so pages load on demand.
+
+    Refuses a table built for a different model: the shapes are often compatible,
+    so the mismatch would otherwise surface as silently wrong inversions.
+    """
+    if not Path(path).exists():
+        raise SystemExit(
+            f"no vocab table at {path}\n"
+            f"Build it: uv run src/vocab_activation_table.py --model_name {expect_model or '<model>'}"
+        )
+    blob = torch.load(path, mmap=True, weights_only=False)
+    built_for = blob.get("model_name")
+    if expect_model and built_for and built_for != expect_model:
+        raise SystemExit(
+            f"{path} was built for {built_for!r}, not {expect_model!r}.\n"
+            f"Rebuild it: uv run src/vocab_activation_table.py --model_name {expect_model}"
+        )
+    return blob["activations"]
 
 
 def load_vocab_layer(table: Tensor, layer: int) -> Tensor:
@@ -437,6 +462,7 @@ def run_layer(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
+    parser.add_argument("--device", type=str, default=pick_device())
     parser.add_argument(
         "--act_path",
         type=str,
@@ -447,7 +473,8 @@ def main():
     parser.add_argument(
         "--vocab_path",
         type=str,
-        default="data/activations/Qwen_Qwen2.5-0.5B-Instruct/vocab/vocab_table.pt",
+        default=None,
+        help="default: derived from --model_name",
     )
     layer_group = parser.add_mutually_exclusive_group()
     layer_group.add_argument(
@@ -522,10 +549,9 @@ def main():
         parser.error("--out_dir requires --all_layers")
     schedule = tuple(int(s) for s in args.schedule.split(","))
 
+    vocab_path = args.vocab_path or str(vocab_table_path(args.model_name))
     model, tokenizer = load_model(args.model_name)
-    if not torch.backends.mps.is_available():
-        raise RuntimeError("MPS is required but torch.backends.mps.is_available() is False")
-    model.to("mps")
+    model.to(args.device)
     print(f"model on {next(model.parameters()).device}, dtype {next(model.parameters()).dtype}")
 
     gold_by_id: dict[str, str] = {}
@@ -545,7 +571,7 @@ def main():
     # Opened once: re-loading per layer re-mmaps the whole table and re-materializes
     # a fresh [vocab, hidden] slice each time, for no gain over letting the page
     # cache serve the same mapping.
-    vocab_table = load_vocab_table(args.vocab_path)
+    vocab_table = load_vocab_table(vocab_path, expect_model=args.model_name)
 
     if args.all_layers:
         n_layers = n_layers_in(args.act_path[0])
