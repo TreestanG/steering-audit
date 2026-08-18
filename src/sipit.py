@@ -3,13 +3,11 @@ import copy
 import json
 import time
 from pathlib import Path
-from typing import cast
 
 import torch
 from torch import Tensor
 
-import utils
-from utils import load_model
+from utils import apply_final_norm, get_base_model, get_decoder_layers, load_model, require_model
 
 # Widen on a miss: true tokens usually rank near the top of next-token order.
 DEFAULT_SCHEDULE: tuple[int, ...] = (32, 96, 384, 1536, 6144, 24576)
@@ -21,17 +19,20 @@ KV_BUDGET_BYTES = 6_000_000_000
 
 def kv_bytes_per_token() -> int:
     """Bytes of KV cache one token costs for a single sequence."""
-    model = utils.model
-    if model is None:
-        raise RuntimeError("Call load_model(...) first")
+    model, _ = require_model()
     cfg = model.config
     head_dim = getattr(cfg, "head_dim", cfg.hidden_size // cfg.num_attention_heads)
     return cfg.num_hidden_layers * 2 * cfg.num_key_value_heads * head_dim * 4
 
 
+def batch_cap(prefix_len: int, max_batch: int = MAX_BATCH) -> int:
+    """Largest candidate batch whose expanded prefix KV cache stays inside the budget."""
+    return max(256, min(max_batch, KV_BUDGET_BYTES // max(1, kv_bytes_per_token() * prefix_len)))
+
+
 def batch_sizes(schedule: tuple[int, ...], vocab_size: int, prefix_len: int) -> list[int]:
     """Widening probe sizes, split so no single batch blows the KV memory budget."""
-    cap = max(256, min(MAX_BATCH, KV_BUDGET_BYTES // max(1, kv_bytes_per_token() * prefix_len)))
+    cap = batch_cap(prefix_len)
     sizes: list[int] = []
     total = 0
     for size in (*schedule, vocab_size):
@@ -103,12 +104,10 @@ class _EarlyExit(Exception):
 @torch.no_grad()
 def encode_step(input_ids: Tensor, cache, attn_len: int):
     """Full-depth step extending `cache`. input_ids [1, k] → (new_cache, last hidden [1, hidden])."""
-    model = utils.model
-    if model is None:
-        raise RuntimeError("Call load_model(...) first")
+    model, _ = require_model()
     device = next(model.parameters()).device
     attn = torch.ones(1, attn_len, dtype=torch.long, device=device)
-    out = model.model(
+    out = get_base_model()(
         input_ids=input_ids.to(device), attention_mask=attn, past_key_values=cache, use_cache=True
     )
     return out.past_key_values, out.last_hidden_state[:, -1]
@@ -117,47 +116,65 @@ def encode_step(input_ids: Tensor, cache, attn_len: int):
 @torch.no_grad()
 def next_token_logits(hidden_last: Tensor) -> Tensor:
     """lm_head on an already-computed final hidden state — no extra forward pass."""
-    model = utils.model
-    if model is None:
-        raise RuntimeError("Call load_model(...) first")
-    return model.lm_head(hidden_last)[0].float().cpu()
+    model, _ = require_model()
+    head = model.get_output_embeddings()
+    if head is None:
+        raise AttributeError(f"{type(model).__name__} has no output embedding layer")
+    return head(hidden_last)[0].float().cpu()
 
 
 @torch.no_grad()
 def candidate_states(cache, prefix_len: int, candidates: Tensor, layer: int) -> Tensor:
     """h_layer at the appended position for each candidate. [n_cands, hidden]"""
-    model = utils.model
-    if model is None:
-        raise RuntimeError("Call load_model(...) first")
+    model, _ = require_model()
     device = next(model.parameters()).device
     n = candidates.shape[0]
 
     if layer == 0:
-        return model.model.embed_tokens(candidates.to(device)).float().cpu()
+        return model.get_input_embeddings()(candidates.to(device)).float().cpu()
 
     batch_cache = copy.deepcopy(cache)
     batch_cache.batch_repeat_interleave(n)
 
-    handle = model.model.layers[layer - 1].register_forward_hook(
+    handle = get_decoder_layers()[layer - 1].register_forward_hook(
         lambda module, inp, out: (_ for _ in ()).throw(
             _EarlyExit(out[0] if isinstance(out, tuple) else out)
         )
     )
     try:
-        model.model(
+        get_base_model()(
             input_ids=candidates.view(-1, 1).to(device),
             attention_mask=torch.ones(n, prefix_len + 1, dtype=torch.long, device=device),
             past_key_values=batch_cache,
         )
         raise RuntimeError(f"layer {layer} hook never fired — is layer <= n_layers?")
     except _EarlyExit as exit:
-        h = exit.value[:, 0]
         # Last-layer hidden_states is post-norm; the hook fires before that.
-        if layer == model.config.num_hidden_layers:
-            h = model.model.norm(h)
+        h = apply_final_norm(exit.value[:, 0], layer)
         return h.float().cpu()
     finally:
         handle.remove()
+
+
+def _step(top2: Top2, *, tol: float, h_norm: float, tried: int, exhaustive: bool) -> dict:
+    """One position's result row, shared by the position-0 lookup and the vocab scan."""
+    gap = top2.gap
+    return {
+        "token": top2.best_id,
+        "residual": top2.best,
+        "runner_up": top2.runner,
+        "gap": gap,
+        # Thm 3.2: recovery guaranteed if residual < gap/2.
+        "ratio": top2.best / gap if gap > 0 else float("inf"),
+        # A partial scan's runner-up can only be farther than the true one, so gap
+        # is an over-estimate and ratio an under-estimate unless this is set.
+        # Downstream plots need it to know whether the Thm 3.2 margin is real.
+        "gap_exhaustive": exhaustive,
+        "tol": tol,
+        "h_norm": h_norm,  # so ‖h‖ survives an absolute --tol run
+        "tried": tried,
+        "matched": top2.best <= tol,
+    }
 
 
 @torch.no_grad()
@@ -174,9 +191,7 @@ def solve_position(
     exhaustive: bool,
 ) -> dict:
     """Find the token whose h_layer at this position equals target."""
-    model = utils.model
-    if model is None:
-        raise RuntimeError("Call load_model(...) first")
+    model, _ = require_model()
     vocab_size = int(model.config.vocab_size)
     tol = match_tol(target, rel_tol, abs_tol)
     order = torch.argsort(logits[:vocab_size], descending=True)
@@ -197,22 +212,8 @@ def solve_position(
         if top2.best <= tol and not exhaustive:
             break
 
-    best_d, runner_d, gap = top2.best, top2.runner, top2.gap
-    return {
-        "token": top2.best_id,
-        "residual": best_d,
-        "runner_up": runner_d,
-        "gap": gap,
-        "ratio": best_d / gap if gap > 0 else float("inf"),  # Thm 3.2: recovery guaranteed if residual < gap/2
-        # A partial scan's runner-up can only be farther than the true one, so
-        # gap is an over-estimate and ratio an under-estimate unless this is set.
-        # Downstream plots need it to know whether the Thm 3.2 margin is real.
-        "gap_exhaustive": tried >= vocab_size,
-        "tol": tol,
-        "h_norm": float(target.norm()),  # so ‖h‖ survives an absolute --tol run
-        "tried": tried,
-        "matched": best_d <= tol,
-    }
+    return _step(top2, tol=tol, h_norm=float(target.norm()), tried=tried,
+                 exhaustive=tried >= vocab_size)
 
 
 @torch.no_grad()
@@ -229,26 +230,19 @@ def sipit(
 ) -> list[dict]:
     """Recover the token sequence behind target [seq, hidden] at one layer."""
     steps: list[dict] = []
-    tol0 = match_tol(target[0], rel_tol, abs_tol)
-    d0 = dists_to(target[0], vocab_layer)
-    top2 = torch.topk(d0, k=2, largest=False)
-    best = float(top2.values[0])
-    token0 = int(top2.indices[0])
-    gap0 = float(top2.values[1] - top2.values[0])
+    n_vocab = vocab_layer.shape[0]
+    top2 = Top2()
+    top2.update(dists_to(target[0], vocab_layer), torch.arange(n_vocab))
     steps.append(
-        {
-            "token": token0,
-            "residual": best,
-            "runner_up": float(top2.values[1]),
-            "gap": gap0,
-            "ratio": best / gap0 if gap0 > 0 else float("inf"),
-            "gap_exhaustive": True,  # position 0 is a full table lookup
-            "tol": tol0,
-            "h_norm": float(target[0].norm()),
-            "tried": vocab_layer.shape[0],
-            "matched": best <= tol0,
-        }
+        _step(
+            top2,
+            tol=match_tol(target[0], rel_tol, abs_tol),
+            h_norm=float(target[0].norm()),
+            tried=n_vocab,
+            exhaustive=True,  # position 0 is a full table lookup
+        )
     )
+    token0 = steps[0]["token"]
     if stop_on_fail and not steps[0]["matched"]:
         return steps
     if target.shape[0] == 1:
@@ -292,7 +286,7 @@ def invert_file(
     noise: float,
 ) -> dict:
     """Invert one saved activation file. Prints the table. Returns a JSON-serializable row."""
-    blob = torch.load(act_path, weights_only=False)
+    blob = torch.load(act_path, mmap=True, weights_only=False)
     target = blob["activations"][layer]
     if max_len:
         target = target[:max_len]
@@ -370,7 +364,7 @@ def invert_file(
 
 def n_layers_in(act_path: str) -> int:
     """Hidden-state count in a saved activation file (embed + each block)."""
-    blob = torch.load(act_path, map_location="cpu", weights_only=False)
+    blob = torch.load(act_path, mmap=True, weights_only=False)
     return int(blob["activations"].shape[0])
 
 
@@ -394,12 +388,10 @@ def run_layer(
     # Stream to a sibling .partial and rename only once every prompt succeeded.
     # Opening the destination directly would truncate a previous run's results
     # before the first forward pass — one bad --act_path then destroys them.
-    out_f = None
-    out_path = tmp_path = None
+    out_f = tmp_path = None
     if out is not None:
-        out_path = out
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = out_path.with_suffix(out_path.suffix + ".partial")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = out.with_suffix(out.suffix + ".partial")
         out_f = tmp_path.open("w")
 
     ok = 0
@@ -432,13 +424,13 @@ def run_layer(
         if out_f is not None:
             out_f.close()
 
-    if tmp_path is not None and out_path is not None:
-        tmp_path.replace(out_path)  # atomic; prior results survive a crash above
+    if tmp_path is not None and out is not None:
+        tmp_path.replace(out)  # atomic; prior results survive a crash above
 
     if n:
         print(f"\nexact {ok}/{n} ({ok * 100 // n}%)")
-    if out_path is not None:
-        print(f"wrote {out_path}")
+    if out is not None:
+        print(f"wrote {out}")
     return n, ok
 
 
@@ -530,13 +522,11 @@ def main():
         parser.error("--out_dir requires --all_layers")
     schedule = tuple(int(s) for s in args.schedule.split(","))
 
-    _, tokenizer = load_model(args.model_name)
-    if utils.model is None:
-        raise RuntimeError("load_model(...) did not set utils.model")
+    model, tokenizer = load_model(args.model_name)
     if not torch.backends.mps.is_available():
         raise RuntimeError("MPS is required but torch.backends.mps.is_available() is False")
-    utils.model.to("mps")
-    print(f"model on {next(utils.model.parameters()).device}, dtype {next(utils.model.parameters()).dtype}")
+    model.to("mps")
+    print(f"model on {next(model.parameters()).device}, dtype {next(model.parameters()).dtype}")
 
     gold_by_id: dict[str, str] = {}
     bank = Path(args.data_path)
