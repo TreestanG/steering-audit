@@ -1,0 +1,335 @@
+"""Recover the injected steering vector from SipIt runs, and localize its layer.
+
+Built on steer_audit.py. Two experiments, both trading on the same identity:
+a steering delta is the difference between the observed state and the clean state
+of whatever token really produced it —
+
+    δ  =  h'_observed  −  h_clean
+
+and SipIt hands you both halves: h'_observed is the state it inverts, and once it
+recovers a token the clean state of *that* token is one more forward pass
+(sipit.candidate_states, the same states the vocab scan already compares against).
+
+  1. RECOVER  (recover_prompt)
+     Steer the last position at layer L, run the full-vocab scan on the steered
+     state, then subtract the recovered token's clean state:  δ̂ = h'_steer − ĥ.
+     We injected δ ourselves, so we can score the recovery directly:
+       cos(δ̂, δ)      direction fidelity   (→ 1 when SipIt recovers the true token)
+       ‖δ̂‖ / ‖δ‖      magnitude fidelity
+     Exact while the true token stays nearest; degrades only gracefully once the
+     steer flips the recovered token, because subtracting the wrong reference
+     costs an error on the scale of inter-token distances while ‖δ‖ at flip
+     strengths is far larger (measured: cos ≥ 0.83 even at fraction 2). The
+     norm-matched random direction rides along to show the method recovers *any*
+     injected vector, not just the sentiment one.
+
+  2. LOCALIZE  (localize_prompt)
+     Inject at ONE layer, then invert at every layer off a single forward pass.
+     Layers before the injection are untouched (residual at the numerical floor);
+     from the injection layer on, the state is off-manifold (residual lifts off).
+     The first layer to clear the floor is the injection layer.
+"""
+
+import argparse
+import json
+import sys
+import time
+from pathlib import Path
+
+import torch
+from torch import Tensor
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import sipit
+import utils
+from sentiment_dir import build_steering_vectors, load_pairs
+from steer_audit import (
+    layer_state,
+    make_delta_hook,
+    random_delta,
+    scan_vocab,
+    steering_delta,
+)
+from utils import get_decoder_layers, load_model
+
+
+def cosine(a: Tensor, b: Tensor) -> float:
+    denom = a.norm() * b.norm()
+    return float(torch.dot(a, b) / denom) if denom > 0 else 0.0
+
+
+@torch.no_grad()
+def recover_prompt(
+    prompt: str,
+    steering: dict[int, tuple[Tensor, Tensor]],
+    *,
+    layers: list[int],
+    fraction: float,
+    seed: int,
+    chunk: int,
+) -> list[dict]:
+    """δ̂ = h'_steer − (clean state of the SipIt-recovered token), scored against known δ."""
+    model, tokenizer = utils.model, utils.tokenizer
+    if model is None or tokenizer is None:
+        raise RuntimeError("Call load_model(...) first")
+
+    ids = tokenizer(prompt, return_tensors="pt")["input_ids"][0].tolist()
+    if len(ids) < 2:
+        raise ValueError(f"prompt tokenizes to {len(ids)} token(s); need >= 2")
+    prefix, true_id = ids[:-1], ids[-1]
+
+    targets: dict[tuple[int, str], Tensor] = {}
+    deltas: dict[int, dict[str, Tensor]] = {}
+    for layer in layers:
+        direction, scale = steering[layer]
+        d_steer = steering_delta(direction, scale, fraction)
+        d_rand = random_delta(model.config.hidden_size, scale, fraction, seed)
+        deltas[layer] = {"steer": d_steer, "rand": d_rand}
+        # Clean target rides along so margin_spent divides by the CLEAN gap, matching
+        # steer_audit. The steered scan's own gap collapses at high fraction (nearest
+        # and runner-up become near-equidistant), which made the old ratio meaningless.
+        targets[layer, "clean"] = layer_state(prompt, layer)
+        targets[layer, "steer"] = layer_state(prompt, layer, make_delta_hook(d_steer))
+        targets[layer, "rand"] = layer_state(prompt, layer, make_delta_hook(d_rand))
+
+    cache, _ = sipit.encode_step(torch.tensor([prefix]), cache=None, attn_len=len(prefix))
+    tracked = scan_vocab(cache, len(prefix), targets, chunk)
+
+    rows = []
+    for layer in layers:
+        row = {"prompt": prompt, "layer": layer, "true_token": true_id}
+        clean_gap = tracked[layer, "clean"].gap
+        # One early-exit forward recovers the clean state of both winning tokens.
+        win_ids = [tracked[layer, "steer"].best_id, tracked[layer, "rand"].best_id]
+        h_hat = sipit.candidate_states(cache, len(prefix), torch.tensor(win_ids), layer)
+        for j, kind in enumerate(("steer", "rand")):
+            t = tracked[layer, kind]
+            delta_hat = targets[layer, kind] - h_hat[j]  # observed − recovered-clean
+            delta_true = deltas[layer][kind]
+            row[kind] = {
+                "recovered_token": t.best_id,
+                "recovered": t.best_id == true_id,
+                "residual": t.best,
+                "gap": t.gap,  # this scan's own runner-up spread, as in steer_audit
+                "margin_spent": t.best / clean_gap if clean_gap > 0 else float("inf"),
+                "cos": cosine(delta_hat, delta_true),
+                "norm_ratio": float(delta_hat.norm() / delta_true.norm()),
+                "delta_true_norm": float(delta_true.norm()),
+                "delta_hat_norm": float(delta_hat.norm()),
+            }
+        rows.append(row)
+    return rows
+
+
+@torch.no_grad()
+def _forward_all_layers(prompt: str, inject_layer: int, delta: Tensor | None, layers: list[int]):
+    """Forward with δ injected at inject_layer only; capture every layer's last state.
+
+    Layer L is captured directly off block L-1's output, exactly as steer_audit's
+    layer_state does — NOT via out.hidden_states. A forward hook that rewrites a
+    block's output is not seen in that block's own out.hidden_states slot (HF fills
+    the slot before the rewrite propagates), so out.hidden_states would place the
+    injection one layer late. Direct capture keeps layer L on the same footing as
+    the vocab-scan candidates (verified: clean residual ~1e-6).
+    """
+    model, tokenizer = utils.model, utils.tokenizer
+    if model is None or tokenizer is None:
+        raise RuntimeError("Call load_model(...) first")
+    blocks = get_decoder_layers()
+    captured: dict[int, Tensor] = {}
+
+    def make_capture(layer: int):
+        def cap(module, inp, out):
+            h = out[0] if isinstance(out, tuple) else out
+            captured[layer] = h[0, -1].detach().clone()
+
+        return cap
+
+    handles = []
+    # Injection hook first, so the same-block capture below sees the steered output.
+    if delta is not None:
+        handles.append(blocks[inject_layer - 1].register_forward_hook(make_delta_hook(delta)))
+    for layer in layers:
+        handles.append(blocks[layer - 1].register_forward_hook(make_capture(layer)))
+
+    device = next(model.parameters()).device
+    inputs = tokenizer(prompt, return_tensors="pt")
+    try:
+        model(**{k: v.to(device) for k, v in inputs.items()})
+    finally:
+        for h in handles:
+            h.remove()
+
+    n_layers = model.config.num_hidden_layers
+    states = {}
+    for layer in layers:
+        h = captured[layer]
+        if layer == n_layers:
+            h = model.model.norm(h)  # final layer is post-norm, matching the scan
+        states[layer] = h.float().cpu()
+    return states
+
+
+@torch.no_grad()
+def localize_prompt(
+    prompt: str,
+    steering: dict[int, tuple[Tensor, Tensor]],
+    *,
+    inject_layer: int,
+    layers: list[int],
+    fraction: float,
+    chunk: int,
+    takeoff_mult: float,
+) -> dict:
+    """Inject at inject_layer; residual across layers takes off at the injection point."""
+    model, tokenizer = utils.model, utils.tokenizer
+    if model is None or tokenizer is None:
+        raise RuntimeError("Call load_model(...) first")
+
+    ids = tokenizer(prompt, return_tensors="pt")["input_ids"][0].tolist()
+    prefix = ids[:-1]
+
+    direction, scale = steering[inject_layer]
+    delta = steering_delta(direction, scale, fraction)
+    steered = _forward_all_layers(prompt, inject_layer, delta, layers)
+    clean = _forward_all_layers(prompt, inject_layer, None, layers)
+
+    targets = {}
+    for layer in layers:
+        targets[layer, "steer"] = steered[layer]
+        targets[layer, "clean"] = clean[layer]
+    cache, _ = sipit.encode_step(torch.tensor([prefix]), cache=None, attn_len=len(prefix))
+    tracked = scan_vocab(cache, len(prefix), targets, chunk)
+
+    rel_steer, rel_clean = {}, {}
+    for layer in layers:
+        rel_steer[layer] = tracked[layer, "steer"].best / float(steered[layer].norm())
+        rel_clean[layer] = tracked[layer, "clean"].best / float(clean[layer].norm())
+
+    floor = max(rel_clean.values())
+    thresh = max(takeoff_mult * floor, 1e-3)
+    takeoff = next((L for L in layers if rel_steer[L] > thresh), None)
+    return {
+        "prompt": prompt,
+        "inject_layer": inject_layer,
+        "takeoff": takeoff,
+        "correct": takeoff == inject_layer,
+        "floor": floor,
+        "thresh": thresh,
+        "rel_steer": {str(L): rel_steer[L] for L in layers},
+        "rel_clean": {str(L): rel_clean[L] for L in layers},
+    }
+
+
+def summarize_recovery(rows: list[dict], layers: list[int]) -> None:
+    print(
+        f"\nRECOVERY  δ̂ = observed − sipit-recovered-clean\n"
+        f"{'layer':>5} {'recov%':>7} {'cos(δ̂,δ)':>10} {'‖δ̂‖/‖δ‖':>10} {'margin':>8}"
+        f"   | random: {'cos':>7} {'recov%':>7}"
+    )
+    for layer in layers:
+        at = [r for r in rows if r["layer"] == layer]
+        if not at:
+            continue
+
+        def mean(fn, kind="steer"):
+            return sum(fn(r[kind]) for r in at) / len(at)
+
+        print(
+            f"{layer:>5} {mean(lambda s: s['recovered']) * 100:>6.0f}% "
+            f"{mean(lambda s: s['cos']):>10.4f} "
+            f"{mean(lambda s: s['norm_ratio']):>10.4f} "
+            f"{mean(lambda s: s['margin_spent']):>8.3f}   | "
+            f"{mean(lambda s: s['cos'], 'rand'):>7.4f} "
+            f"{mean(lambda s: s['recovered'], 'rand') * 100:>6.0f}%"
+        )
+    good = [r["steer"]["cos"] for r in rows if r["steer"]["recovered"]]
+    if good:
+        print(f"\nwhere token recovered: mean cos(δ̂,δ) = {sum(good) / len(good):.5f}  (n={len(good)})")
+
+
+def summarize_localization(rows: list[dict]) -> None:
+    print(f"\nLOCALIZATION  injection layer via residual takeoff")
+    print(f"{'inject':>7} {'detected':>9} {'correct':>8}  (per prompt)")
+    by_inject: dict[int, list[dict]] = {}
+    for r in rows:
+        by_inject.setdefault(r["inject_layer"], []).append(r)
+    for inject in sorted(by_inject):
+        at = by_inject[inject]
+        detected = [str(r["takeoff"]) for r in at]
+        acc = sum(r["correct"] for r in at) / len(at) * 100
+        print(f"{inject:>7} {','.join(detected):>9} {acc:>6.0f}%")
+
+
+def main() -> None:
+    p = argparse.ArgumentParser()
+    p.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
+    p.add_argument("--train_path", type=str, default="data/sentiment_opposites_train.json")
+    p.add_argument("--test_path", type=str, default="data/sentiment_opposites_test.json")
+    p.add_argument("--fraction", type=float, default=0.1)
+    p.add_argument("--n_prompts", type=int, default=5)
+    p.add_argument("--layers", type=str, default="", help="recovery layers (default: all)")
+    p.add_argument("--inject_layers", type=str, default="6,12,18",
+                   help="layers to inject at for the localization test")
+    p.add_argument("--takeoff_mult", type=float, default=10.0,
+                   help="residual must exceed this × the clean floor to count as takeoff")
+    p.add_argument("--chunk", type=int, default=2048)
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--out_dir", type=str, default=None,
+                   help="default: results/<model-slug>/")
+    args = p.parse_args()
+
+    load_model(args.model_name)
+    if utils.model is None:
+        raise RuntimeError("load_model(...) did not set utils.model")
+    steering = build_steering_vectors(load_pairs(args.train_path))  # before device move
+
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    utils.model.to(device)
+    print(f"model on {next(utils.model.parameters()).device}")
+
+    n_layers = utils.model.config.num_hidden_layers
+    layers = [int(s) for s in args.layers.split(",")] if args.layers else list(range(1, n_layers + 1))
+    inject_layers = [int(s) for s in args.inject_layers.split(",") if s]
+    prompts = [neg for _, neg in load_pairs(args.test_path)][: args.n_prompts]
+
+    slug = args.model_name.replace("/", "_")
+    out_dir = Path(args.out_dir) if args.out_dir else Path(f"results/{slug}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rec_path, loc_path = out_dir / "steer_recover.jsonl", out_dir / "steer_localize.jsonl"
+
+    print(f"{len(prompts)} prompts | recover {len(layers)} layers | localize {inject_layers}")
+
+    rec_rows: list[dict] = []
+    with rec_path.open("w") as f:
+        for i, prompt in enumerate(prompts, start=1):
+            t0 = time.time()
+            got = recover_prompt(prompt, steering, layers=layers,
+                                 fraction=args.fraction, seed=args.seed, chunk=args.chunk)
+            for row in got:
+                f.write(json.dumps(row) + "\n")
+            f.flush()
+            rec_rows.extend(got)
+            print(f"[recover {i}/{len(prompts)}] {prompt!r} {time.time() - t0:.1f}s")
+
+    loc_rows: list[dict] = []
+    with loc_path.open("w") as f:
+        for i, prompt in enumerate(prompts, start=1):
+            t0 = time.time()
+            for inject in inject_layers:
+                row = localize_prompt(prompt, steering, inject_layer=inject, layers=layers,
+                                      fraction=args.fraction, chunk=args.chunk,
+                                      takeoff_mult=args.takeoff_mult)
+                f.write(json.dumps(row) + "\n")
+                loc_rows.append(row)
+            f.flush()
+            print(f"[localize {i}/{len(prompts)}] {prompt!r} {time.time() - t0:.1f}s")
+
+    summarize_recovery(rec_rows, layers)
+    summarize_localization(loc_rows)
+    print(f"\nwrote {rec_path}\nwrote {loc_path}")
+
+
+if __name__ == "__main__":
+    main()
