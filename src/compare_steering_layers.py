@@ -1,43 +1,10 @@
 import argparse
-from pathlib import Path
-import sys
 
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-import utils
 from sentiment_dir import build_steering_vectors, load_pairs, make_add_vector_hook
-from utils import get_decoder_layers, load_model
-
-
-def layer_output(prompt, layer, hook_fn=None):
-    assert utils.model is not None and utils.tokenizer is not None
-    captured = {}
-
-    def capture(module, input, output):
-        out = output[0] if isinstance(output, tuple) else output
-        captured["act"] = out[0, -1].detach().clone()
-
-    block = get_decoder_layers()[layer - 1]
-    handles = []
-    if hook_fn is not None:
-        handles.append(block.register_forward_hook(hook_fn))
-    handles.append(block.register_forward_hook(capture))
-
-    inputs = utils.tokenizer(prompt, return_tensors="pt")
-    try:
-        with torch.no_grad():
-            utils.model(**inputs)
-    finally:
-        for h in handles:
-            h.remove()
-
-    return captured["act"]
-
-
-def expected_add(direction, scale, fraction):
-    return fraction * scale * direction / direction.norm()
+from steer_audit import layer_state, steering_delta
+from utils import load_model
 
 
 def main():
@@ -66,10 +33,12 @@ def main():
 
     for layer, (direction, scale) in steering.items():
         hook_fn = make_add_vector_hook(direction, scale, args.fraction)
-        delta_expected = expected_add(direction, scale, args.fraction)
+        delta_expected = steering_delta(direction, scale, args.fraction)
 
-        base = layer_output(args.prompt, layer)
-        steered = layer_output(args.prompt, layer, hook_fn=hook_fn)
+        # Raw block output on both sides: the final norm is nonlinear, so
+        # post-norming layer 24 would break steered - base == delta.
+        base = layer_state(args.prompt, layer, post_norm=False)
+        steered = layer_state(args.prompt, layer, hook_fn=hook_fn, post_norm=False)
         delta = steered - base
 
         ok = torch.allclose(delta, delta_expected, atol=args.atol, rtol=0)
