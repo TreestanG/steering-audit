@@ -35,8 +35,9 @@ Every stage appends a full DEBUG log to results/<slug>/logs/<stage>.log
 regardless of console verbosity, and the pipeline's own narration is appended
 to results/<slug>/logs/run.log.
 
-The vocab table is the expensive artifact (vocab x layers x hidden x 4B: ~13 GB
-for Qwen-0.5B at fp32, half that at fp16) and is never rebuilt unless --force.
+The vocab table is the expensive artifact (vocab x layers x hidden, stored at
+--dtype: ~13 GB for Qwen-0.5B at fp32, half that at fp16) and is never rebuilt
+unless --force.
 Note that --dtype must match the table on disk; sipit.py refuses a mismatch.
 
   scripts/run_model.sh gpt2                 # quick validation of a new model

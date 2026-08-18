@@ -98,8 +98,13 @@ def load_vocab_table(
 
 
 def load_vocab_layer(table: Tensor, layer: int) -> Tensor:
-    """[vocab, hidden] slice at one layer. Materializes ~‖V‖x hidden floats."""
-    return table[:, layer, :].contiguous()
+    """[vocab, hidden] slice at one layer, in fp32. Materializes ~‖V‖x hidden floats.
+
+    The table is stored at the model's dtype; the distances are compared against
+    targets and tolerances computed in fp32, so the cast happens once here rather
+    than being left to type promotion inside the chunked scan.
+    """
+    return table[:, layer, :].float().contiguous()
 
 
 def dists_to(vec: Tensor, table: Tensor, chunk: int = 8192) -> Tensor:

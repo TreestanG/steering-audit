@@ -35,16 +35,21 @@ def main():
     path = out_dir / "vocab_table.pt"
 
     # Disk-backed rather than anonymous memory. The table is vocab x n_layers x
-    # hidden float32 — 13 GB for a 152k vocab at 0.5B — and holding all of it
+    # hidden — 13 GB for a 152k vocab at 0.5B/fp32 — and holding all of it
     # resident until torch.save runs gets the process OOM-killed after every
     # forward pass has already been paid for. Pages of a shared file mapping are
     # reclaimable, so peak RSS tracks page-cache pressure instead of the artifact.
+    #
+    # Stored at the model's own dtype: the states come out of the forward pass in
+    # that precision, so an fp32 buffer doubles the artifact to hold zeros in the
+    # low mantissa bits. sipit.load_vocab_layer casts back up for the distance math.
+    dtype = DTYPES[args.dtype]
     scratch = out_dir / "vocab_table.build"
     table = torch.from_file(
         str(scratch),
         shared=True,
         size=vocab_size * n_layers * hidden,
-        dtype=torch.float32,
+        dtype=dtype,
     ).view(vocab_size, n_layers, hidden)
 
     try:
@@ -72,7 +77,11 @@ def main():
     finally:
         del table
         scratch.unlink(missing_ok=True)
-    logger.info("vocab table [%d, %d, %d] -> %s", vocab_size, n_layers, hidden, path)
+    logger.info(
+        "vocab table [%d, %d, %d] %s (%.1f GB) -> %s",
+        vocab_size, n_layers, hidden, args.dtype,
+        vocab_size * n_layers * hidden * dtype.itemsize / 1e9, path,
+    )
 
 
 if __name__ == "__main__":
