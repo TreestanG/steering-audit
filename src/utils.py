@@ -126,6 +126,8 @@ def get_token_activations(
     model, tokenizer = require_model()
 
     inputs = tokenizer(prompts, return_tensors="pt", padding=True)
+    device = next(model.parameters()).device
+    inputs = {key: value.to(device) for key, value in inputs.items()}
     attention_mask = inputs["attention_mask"]
     with torch.no_grad():
         outputs = model(**inputs, output_hidden_states=True)

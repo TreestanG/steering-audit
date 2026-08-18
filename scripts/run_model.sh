@@ -151,7 +151,7 @@ say ""
 
 # Prerequisites: everything downstream reads these, so a failure here is fatal.
 stage activations "$ACT_DIR/*.pt" \
-    uv run src/save_activations.py --model_name "$MODEL" --dtype "$DTYPE" || exit 1
+    uv run src/save_activations.py "${COMMON[@]}" || exit 1
 stage vocab "$ACT_DIR/vocab/vocab_table.pt" \
     uv run src/vocab_activation_table.py "${COMMON[@]}" || exit 1
 
@@ -160,7 +160,7 @@ stage sipit "$RES/sipit/layers/sipit_layer_00.jsonl" \
     scripts/eval_sipit_layers.sh --act_dir "$ACT_DIR" --n_prompts "$SIPIT_PROMPTS" \
         --model_name "$MODEL" --dtype "$DTYPE" ${DEVICE:+--device "$DEVICE"}
 stage sentiment "$RES/sentiment/gaps.json" \
-    uv run src/sentiment_dir.py --model_name "$MODEL"
+    uv run src/sentiment_dir.py --model_name "$MODEL" --fractions "$FRACTIONS"
 stage audit "$RES/steer/audit.jsonl" \
     uv run src/steer_audit.py "${COMMON[@]}" --n_prompts "$AUDIT_PROMPTS"
 stage fractions "$RES/steer/fractions/*.jsonl" \

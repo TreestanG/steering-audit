@@ -5,7 +5,7 @@ import torch
 from log import add_logging_args, get_logger, heartbeat
 from log import setup as log_setup
 from paths import activations_dir, logs_dir
-from utils import DTYPES, load_model
+from utils import DTYPES, load_model, pick_device
 
 
 logger = get_logger(__name__)
@@ -17,15 +17,15 @@ def main():
     parser.add_argument("--output_dir", type=str, default="data/activations")
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--dtype", type=str, default="float32", choices=list(DTYPES))
-    parser.add_argument("--device", type=str, default=None, help="default: CPU")
+    parser.add_argument("--device", type=str, default=pick_device())
     add_logging_args(parser)
     args = parser.parse_args()
     log_setup(args, default_log=logs_dir(args.model_name) / "vocab.log")
 
     model, _ = load_model(args.model_name, dtype=DTYPES[args.dtype])
-    if args.device:
-        model.to(args.device)
+    model.to(args.device)
     device = next(model.parameters()).device
+    logger.info("model on %s, %s", device, args.dtype)
     vocab_size = int(model.config.vocab_size)
     hidden = int(model.config.hidden_size)
     n_layers = int(model.config.num_hidden_layers) + 1  # embed + after each block
@@ -64,6 +64,7 @@ def main():
                 "activations": table,
                 "model_name": args.model_name,
                 "dtype": args.dtype,
+                "device": args.device,
                 "vocab_size": vocab_size,
             },
             path,

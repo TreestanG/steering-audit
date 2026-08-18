@@ -6,7 +6,7 @@ import torch
 from log import add_logging_args, get_logger, heartbeat
 from log import setup as log_setup
 from paths import activations_dir, logs_dir
-from utils import DTYPES, get_token_activations, load_model
+from utils import DTYPES, get_token_activations, load_model, pick_device
 
 
 logger = get_logger(__name__)
@@ -18,6 +18,7 @@ def main():
     parser.add_argument("--data_path", type=str, default="data/trajectory_bank_prompts.json")
     parser.add_argument("--output_dir", type=str, default="data/activations")
     parser.add_argument("--dtype", type=str, default="float32", choices=list(DTYPES))
+    parser.add_argument("--device", type=str, default=pick_device())
     add_logging_args(parser)
     args = parser.parse_args()
     log_setup(args, default_log=logs_dir(args.model_name) / "activations.log")
@@ -25,7 +26,9 @@ def main():
     out_dir = activations_dir(args.model_name, args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    load_model(args.model_name, dtype=DTYPES[args.dtype])
+    model, _ = load_model(args.model_name, dtype=DTYPES[args.dtype])
+    model.to(args.device)
+    logger.info("model on %s, %s", next(model.parameters()).device, args.dtype)
 
     data = json.load(open(args.data_path))
     prompts = data["prompts"] # array of {"id": str, "category": base64, "text": str}
@@ -44,6 +47,7 @@ def main():
                 "attention_mask": mask[0].cpu(),
                 "model_name": args.model_name,
                 "dtype": args.dtype,
+                "device": args.device,
             },
             out_dir / f"{prompt['id']}.pt",
         )
