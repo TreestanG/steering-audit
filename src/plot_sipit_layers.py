@@ -1,10 +1,4 @@
-# ‖h‖ is not stored per step, but tol is, and tol = rel_tol * ‖h‖ (see
-# sipit.match_tol), so ‖h‖ = tol / rel_tol. Anything derived from the norm
-# therefore needs the rel_tol the sweep was run with.
-DEFAULT_REL_TOL = 1e-3
-
 import argparse
-import json
 import math
 from pathlib import Path
 
@@ -13,19 +7,11 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# Thm 3.2: recovery is guaranteed while residual < gap/2, so this is the
-# failure boundary in scale-free units, not a tunable threshold.
-THM_BOUND = 0.5
+from plot_common import THM_BOUND, load_rows, save_fig, style_layer_axis, xy
 
-
-def load_layer_rows(path: Path) -> list[dict]:
-    rows = []
-    with path.open() as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
-    return rows
+# Older files store only tol, and tol = rel_tol * ‖h‖ (see sipit.match_tol),
+# so ‖h‖ = tol / rel_tol for anything predating the per-step h_norm field.
+DEFAULT_REL_TOL = 1e-3
 
 
 def _finite(values: list[float]) -> list[float]:
@@ -33,12 +19,10 @@ def _finite(values: list[float]) -> list[float]:
     return [v for v in values if v is not None and math.isfinite(v)]
 
 
-def _pct(values: list[float], q: float) -> float | None:
-    vals = sorted(_finite(values))
+def _pct(vals: list[float], q: float) -> float | None:
+    """q-quantile of an already-sorted, already-finite list."""
     if not vals:
         return None
-    if len(vals) == 1:
-        return vals[0]
     pos = q * (len(vals) - 1)
     lo = int(math.floor(pos))
     hi = min(lo + 1, len(vals) - 1)
@@ -46,12 +30,13 @@ def _pct(values: list[float], q: float) -> float | None:
 
 
 def _band(values: list[float]) -> dict:
+    vals = sorted(_finite(values))
     return {
-        "p10": _pct(values, 0.10),
-        "p50": _pct(values, 0.50),
-        "p90": _pct(values, 0.90),
-        "p99": _pct(values, 0.99),
-        "max": max(_finite(values)) if _finite(values) else None,
+        "p10": _pct(vals, 0.10),
+        "p50": _pct(vals, 0.50),
+        "p90": _pct(vals, 0.90),
+        "p99": _pct(vals, 0.99),
+        "max": vals[-1] if vals else None,
     }
 
 
@@ -91,7 +76,7 @@ def summarize(in_dir: Path, rel_tol: float = DEFAULT_REL_TOL) -> list[dict]:
 
     summaries = []
     for path in files:
-        rows = load_layer_rows(path)
+        rows = load_rows(path)
         if not rows:
             continue
 
@@ -133,10 +118,10 @@ def summarize(in_dir: Path, rel_tol: float = DEFAULT_REL_TOL) -> list[dict]:
                 "ratio": _band(ratios),
                 "res_over_tol": _band(res_over_tol),
                 "tried": _band(tried),
-                "tol_pos0": _pct(tol_pos0, 0.5),
-                "tol_rest": _pct(tol_rest, 0.5),
+                "tol_pos0": _pct(sorted(_finite(tol_pos0)), 0.5),
+                "tol_rest": _pct(sorted(_finite(tol_rest)), 0.5),
                 "sep": _band(sep_rest),
-                "sep_pos0": _pct(sep_pos0, 0.5),
+                "sep_pos0": _pct(sorted(_finite(sep_pos0)), 0.5),
                 # Positions whose scan stopped early: their runner-up is the
                 # nearest of the candidates tried, not of the vocabulary, so gap
                 # is an over-estimate and residual/gap an under-estimate.
@@ -157,8 +142,8 @@ def _band_panel(ax, layers, summaries, key, title, ylabel, *, log=True, color="C
         ax.text(0.5, 0.5, "no data", ha="center", va="center", transform=ax.transAxes)
         ax.set_title(title)
         return
-    xs = [layers[i] for i in ok]
-    ax.plot(xs, [p50[i] for i in ok], marker="o", ms=3.5, color=color, label="median")
+    xs, ys = xy(layers, p50)
+    ax.plot(xs, ys, marker="o", ms=3.5, color=color, label="median")
     if all(lo[i] is not None and hi[i] is not None for i in ok):
         ax.fill_between(
             xs, [lo[i] for i in ok], [hi[i] for i in ok], alpha=0.2, color=color, lw=0,
@@ -200,11 +185,8 @@ def _caveat(ax, note: str | None) -> None:
 
 def _panel_margin(ax, layers, summaries):
     _band_panel(ax, layers, summaries, "ratio", "Recovery margin", "residual / gap")
-    worst = [s["ratio"]["max"] for s in summaries]
-    ok = [i for i, v in enumerate(worst) if v is not None]
-    if ok:
-        ax.plot([layers[i] for i in ok], [worst[i] for i in ok],
-                color="C0", ls=":", lw=1, marker=".", ms=3, label="worst position")
+    ax.plot(*xy(layers, [s["ratio"]["max"] for s in summaries]),
+            color="C0", ls=":", lw=1, marker=".", ms=3, label="worst position")
     ax.axhline(THM_BOUND, color="C3", ls="--", lw=1.2,
                label=f"Thm 3.2 bound ({THM_BOUND})")
     ax.legend(fontsize=7, loc="best")
@@ -212,9 +194,8 @@ def _panel_margin(ax, layers, summaries):
 
 
 def _panel_exact(ax, layers, summaries):
-    fracs = [s["exact_frac"] for s in summaries]
-    ok = [i for i, v in enumerate(fracs) if v is not None]
-    ax.bar([layers[i] for i in ok], [fracs[i] * 100 for i in ok], color="C2", width=0.7)
+    xs, fracs = xy(layers, [s["exact_frac"] for s in summaries])
+    ax.bar(xs, [f * 100 for f in fracs], color="C2", width=0.7)
     ax.axhline(100, color="C7", ls=":", lw=1)
     ax.set_ylim(0, 105)
     ax.set_title("Exact recovery")
@@ -229,16 +210,10 @@ def _panel_accept(ax, layers, summaries):
 
 
 def _panel_norm(ax, layers, summaries):
-    p0 = [s["tol_pos0"] for s in summaries]
-    rest = [s["tol_rest"] for s in summaries]
-    a = [i for i, v in enumerate(p0) if v]
-    b = [i for i, v in enumerate(rest) if v]
-    if a:
-        ax.plot([layers[i] for i in a], [p0[i] for i in a],
-                marker="o", ms=3.5, color="C1", label="position 0 (sink)")
-    if b:
-        ax.plot([layers[i] for i in b], [rest[i] for i in b],
-                marker="o", ms=3.5, color="C0", label="positions t>0 (median)")
+    ax.plot(*xy(layers, [s["tol_pos0"] for s in summaries]),
+            marker="o", ms=3.5, color="C1", label="position 0 (sink)")
+    ax.plot(*xy(layers, [s["tol_rest"] for s in summaries]),
+            marker="o", ms=3.5, color="C0", label="positions t>0 (median)")
     ax.set_yscale("log")
     ax.set_title("Activation scale  (tol ∝ ‖h‖)")
     ax.set_ylabel("tol")
@@ -251,11 +226,8 @@ def _panel_separation(ax, layers, summaries):
     _band_panel(ax, layers, summaries, "sep", "Token spacing vs activation scale",
                 "gap / ‖h‖", log=False, color="C9")
     ax.set_yscale("log")
-    p0 = [s.get("sep_pos0") for s in summaries]
-    a = [i for i, v in enumerate(p0) if v]
-    if a:
-        ax.plot([layers[i] for i in a], [p0[i] for i in a], marker="o", ms=3.5,
-                color="C1", label="position 0 (sink, whole vocab)")
+    ax.plot(*xy(layers, [s.get("sep_pos0") for s in summaries]), marker="o", ms=3.5,
+            color="C1", label="position 0 (sink, whole vocab)")
 
     # Anchor at layer 1: layer 0 is the embedding table, where inversion is a
     # lookup rather than a forward pass, so it is not on the same footing.
@@ -280,11 +252,8 @@ def _panel_tried(ax, layers, summaries):
         ("p99", dict(ls="--", marker=".", ms=3), "p99"),
         ("max", dict(ls=":", marker=".", ms=3), "worst position"),
     ):
-        vals = [s["tried"][stat] for s in summaries]
-        ok = [i for i, v in enumerate(vals) if v is not None]
-        if ok:
-            ax.plot([layers[i] for i in ok], [vals[i] for i in ok],
-                    color="C5", label=label, **style)
+        ax.plot(*xy(layers, [s["tried"][stat] for s in summaries]),
+                color="C5", label=label, **style)
     ax.set_yscale("log")
     ax.set_title("Candidates scanned per position")
     ax.set_ylabel("candidates")
@@ -308,12 +277,6 @@ PANELS = [
 ]
 
 
-def _style_layer_axis(ax, layers: list[int]) -> None:
-    ax.set_xlabel("Hidden-state layer")
-    ax.set_xticks(layers[::2] if len(layers) > 14 else layers)
-    ax.grid(True, alpha=0.3)
-
-
 def plot_metrics(summaries: list[dict], out: Path) -> None:
     layers = [s["layer"] for s in summaries]
 
@@ -322,7 +285,7 @@ def plot_metrics(summaries: list[dict], out: Path) -> None:
     flat = axes.ravel()
     for ax, (_, fn) in zip(flat, PANELS):
         fn(ax, layers, summaries)
-        _style_layer_axis(ax, layers)
+        style_layer_axis(ax, layers)
     for ax in flat[len(PANELS):]:
         ax.axis("off")
     fig.suptitle(
@@ -330,20 +293,14 @@ def plot_metrics(summaries: list[dict], out: Path) -> None:
         fontsize=11,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.98))
-    out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=200)
-    plt.close(fig)
-    print(f"saved {out}")
+    save_fig(fig, out)
 
     for name, fn in PANELS:
         fig, ax = plt.subplots(figsize=(8, 4.5))
         fn(ax, layers, summaries)
-        _style_layer_axis(ax, layers)
+        style_layer_axis(ax, layers)
         fig.tight_layout()
-        path = out.parent / f"{out.stem}_{name}.png"
-        fig.savefig(path, dpi=200)
-        plt.close(fig)
-        print(f"saved {path}")
+        save_fig(fig, out.parent / f"{out.stem}_{name}.png")
 
 
 def main() -> None:

@@ -1,5 +1,4 @@
 import argparse
-import json
 import re
 from pathlib import Path
 
@@ -9,7 +8,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-THM_BOUND = 0.5  # Thm 3.2: exact recovery guaranteed while residual/gap < 1/2.
+from paths import results_dir
+from plot_common import THM_BOUND, first_crossing, load_rows, save_fig, style_layer_axis
+
 FRACTION_RE = re.compile(r"steer_audit_f([0-9.eE+-]+)\.jsonl$")
 
 
@@ -21,7 +22,7 @@ def load_sweep(in_dir: Path) -> dict[float, list[dict]]:
         if m is None:
             print(f"skipping {path.name}: no fraction in filename")
             continue
-        rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+        rows = load_rows(path)
         if rows:
             out[float(m.group(1))] = rows
     return dict(sorted(out.items()))
@@ -37,13 +38,6 @@ def per_layer(rows: list[dict], fn) -> tuple[list[int], list[float]]:
     return layers, means
 
 
-def first_crossing(layers: list[int], ys: list[float], thresh: float) -> int | None:
-    for layer, y in zip(layers, ys):
-        if y >= thresh:
-            return layer
-    return None
-
-
 def colors_for(fractions: list[float]) -> dict[float, tuple]:
     """Log-spaced along viridis — the fractions span 200x, so linear would bunch."""
     logs = np.log10(fractions)
@@ -52,9 +46,8 @@ def colors_for(fractions: list[float]) -> dict[float, tuple]:
     return {f: plt.cm.viridis(0.05 + 0.85 * t) for f, t in zip(fractions, norm)}
 
 
-def _panel_margin(ax, sweep, colors):
-    for frac, rows in sweep.items():
-        layers, ys = per_layer(rows, lambda r: r["steer"]["margin_spent"])
+def _panel_margin(ax, sweep, colors, margins):
+    for frac, (layers, ys) in margins.items():
         ax.plot(layers, ys, "-o", color=colors[frac], ms=3, lw=1.4, label=f"{frac:g}")
     # Log scale first: the shaded band is drawn in data coords, so it has to be
     # sized against the log-autoscaled limits, not the linear ones.
@@ -93,10 +86,9 @@ def _panel_residual(ax, sweep, colors, rel_tol):
     ax.legend(fontsize=6, title="fraction", title_fontsize=7, ncol=2, loc="lower left")
 
 
-def _panel_safe_depth(ax, sweep, colors, max_layer):
+def _panel_safe_depth(ax, sweep, colors, max_layer, margins):
     fracs, crossings, labels = [], [], []
-    for frac, rows in sweep.items():
-        layers, ys = per_layer(rows, lambda r: r["steer"]["margin_spent"])
+    for frac, (layers, ys) in margins.items():
         cross = first_crossing(layers, ys, THM_BOUND)
         fracs.append(frac)
         # Never crossing means every layer is guaranteed; plot it one past the
@@ -124,16 +116,17 @@ def plot(sweep: dict[float, list[dict]], out: Path, rel_tol: float, model_name: 
     layers = sorted({r["layer"] for r in all_rows})
     n_prompts = len({r["prompt"] for r in all_rows})
 
+    # Panels A and D read the same aggregation; compute it once.
+    margins = {f: per_layer(rows, lambda r: r["steer"]["margin_spent"]) for f, rows in sweep.items()}
+
     fig, axes = plt.subplots(2, 2, figsize=(13, 9))
-    _panel_margin(axes[0, 0], sweep, colors)
+    _panel_margin(axes[0, 0], sweep, colors, margins)
     _panel_recovery(axes[0, 1], sweep, colors)
     _panel_residual(axes[1, 0], sweep, colors, rel_tol)
-    _panel_safe_depth(axes[1, 1], sweep, colors, max(layers))
+    _panel_safe_depth(axes[1, 1], sweep, colors, max(layers), margins)
     for ax in axes.ravel()[:3]:
-        ax.set_xlabel("Hidden-state layer  (output of block i)")
-        ax.set_xticks(layers[::2])
-    for ax in axes.ravel():
-        ax.grid(True, alpha=0.3)
+        style_layer_axis(ax, layers)
+    axes[1, 1].grid(True, alpha=0.3)
 
     rec = sum(r["steer"]["recovered"] for r in all_rows) / len(all_rows) * 100
     fig.suptitle(
@@ -143,10 +136,7 @@ def plot(sweep: dict[float, list[dict]], out: Path, rel_tol: float, model_name: 
         fontsize=12,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.94))
-    out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=200)
-    plt.close(fig)
-    print(f"saved {out}")
+    save_fig(fig, out)
 
 
 def main() -> None:
@@ -161,9 +151,9 @@ def main() -> None:
                    help="detection floor the audits ran with")
     args = p.parse_args()
 
-    slug = args.model_name.replace("/", "_")
-    in_dir = Path(args.in_dir) if args.in_dir else Path(f"results/{slug}/fractions")
-    out = Path(args.out) if args.out else Path(f"results/{slug}/steer_fraction_sweep.png")
+    rdir = results_dir(args.model_name)
+    in_dir = Path(args.in_dir) if args.in_dir else rdir / "fractions"
+    out = Path(args.out) if args.out else rdir / "steer_fraction_sweep.png"
 
     sweep = load_sweep(in_dir)
     if not sweep:

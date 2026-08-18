@@ -1,15 +1,13 @@
 import argparse
 import json
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from plot_common import C_RAND, C_SEP, C_STEER, save_fig
 from plot_sipit_layers import DEFAULT_REL_TOL, partial_gap_note, summarize
 
 
@@ -63,9 +61,6 @@ def align(sipit_summaries: list[dict], steering: dict) -> dict:
         "steered": [steering["by_layer"][L]["steered_gap_mean"] for L in layers],
         "random": [steering["by_layer"][L]["random_gap_mean"] for L in layers],
     }
-
-
-C_SEP, C_STEER, C_RAND = "C9", "C3", "C7"
 
 
 def _panel_twin(ax, data, meta):
@@ -147,10 +142,7 @@ def plot(data: dict, meta: dict, out: Path, caveat: str | None = None) -> None:
         title += "\n" + caveat.replace("\n", " ")
     fig.suptitle(title, fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.96))
-    out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=200)
-    plt.close(fig)
-    print(f"saved {out}")
+    save_fig(fig, out)
 
 
 def main() -> None:

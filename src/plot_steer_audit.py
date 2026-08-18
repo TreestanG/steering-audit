@@ -1,5 +1,4 @@
 import argparse
-import json
 from pathlib import Path
 
 import matplotlib
@@ -7,50 +6,34 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-THM_BOUND = 0.5  # Thm 3.2: exact recovery guaranteed while residual/gap < 1/2.
-C_STEER, C_RAND, C_GAP, C_RES = "C3", "C7", "C9", "C1"
+from paths import results_dir
+from plot_common import (
+    THM_BOUND,
+    C_GAP,
+    C_RAND,
+    C_RES,
+    C_STEER,
+    first_crossing,
+    group_by_layer,
+    load_rows,
+    save_fig,
+    stat,
+    style_layer_axis,
+)
 
 
-def load_rows(path: Path) -> list[dict]:
-    return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
-
-
-def by_layer(rows: list[dict]) -> tuple[list[int], dict]:
-    layers = sorted({r["layer"] for r in rows})
-    groups = {L: [r for r in rows if r["layer"] == L] for L in layers}
-    return layers, groups
-
-
-def _stat(groups, layers, fn):
-    """(mean, lo, hi) across prompts per layer; band is min–max since n is small."""
-    mean, lo, hi = [], [], []
-    for L in layers:
-        vals = [fn(r) for r in groups[L]]
-        mean.append(sum(vals) / len(vals))
-        lo.append(min(vals))
-        hi.append(max(vals))
-    return mean, lo, hi
-
-
-def _line(ax, xs, stat, color, label, ls="-", band=True):
-    mean, lo, hi = stat
+def _line(ax, xs, band_stat, color, label, ls="-", band=True):
+    mean, lo, hi = band_stat
     ax.plot(xs, mean, ls + "o" if ls == "-" else ls, color=color, ms=4, label=label)
     if band:
         ax.fill_between(xs, lo, hi, color=color, alpha=0.15, lw=0)
     return mean
 
 
-def _first_crossing(xs, ys, thresh):
-    for x, y in zip(xs, ys):
-        if y >= thresh:
-            return x
-    return None
-
-
-def _panel_margin(ax, xs, groups, layers):
-    steer = _line(ax, xs, _stat(groups, layers, lambda r: r["steer"]["margin_spent"]),
+def _panel_margin(ax, groups, layers):
+    steer = _line(ax, layers, stat(groups, layers, lambda r: r["steer"]["margin_spent"]),
                   C_STEER, "steering")
-    rand = _line(ax, xs, _stat(groups, layers, lambda r: r["rand"]["margin_spent"]),
+    rand = _line(ax, layers, stat(groups, layers, lambda r: r["rand"]["margin_spent"]),
                  C_RAND, "random (control)", ls="--", band=False)
     # Both curves: the control can outrun the steer, and clipping it off the top
     # would read as the control flattening out.
@@ -59,7 +42,7 @@ def _panel_margin(ax, xs, groups, layers):
     ax.axhline(THM_BOUND, color=C_STEER, ls="--", lw=1.2, label=f"Thm 3.2 bound ({THM_BOUND})")
     ax.set_ylim(0, top)
 
-    cross = _first_crossing(xs, steer, THM_BOUND)
+    cross = first_crossing(layers, steer, THM_BOUND)
     if cross is not None:
         ax.axvline(cross, color="0.5", ls=":", lw=1)
         ax.annotate(f"crosses at\nlayer {cross}", xy=(cross, THM_BOUND),
@@ -71,10 +54,10 @@ def _panel_margin(ax, xs, groups, layers):
     ax.legend(fontsize=7, loc="upper left")
 
 
-def _panel_mechanism(ax, xs, groups, layers):
-    _line(ax, xs, _stat(groups, layers, lambda r: r["rel_gap"]),
+def _panel_mechanism(ax, groups, layers):
+    _line(ax, layers, stat(groups, layers, lambda r: r["rel_gap"]),
           C_GAP, "gap / ‖h‖  (room, collapses)")
-    _line(ax, xs, _stat(groups, layers, lambda r: r["steer"]["rel_residual"]),
+    _line(ax, layers, stat(groups, layers, lambda r: r["steer"]["rel_residual"]),
           C_RES, "residual / ‖h‖  (steer size, flat)")
     ax.set_title("Why: gap collapses, residual is pinned")
     ax.set_ylabel("fraction of ‖h‖")
@@ -83,8 +66,8 @@ def _panel_mechanism(ax, xs, groups, layers):
     ax.legend(fontsize=7, loc="upper right")
 
 
-def _panel_detection(ax, xs, groups, layers, rel_tol):
-    res = _line(ax, xs, _stat(groups, layers, lambda r: r["steer"]["rel_residual"]),
+def _panel_detection(ax, groups, layers, rel_tol):
+    res = _line(ax, layers, stat(groups, layers, lambda r: r["steer"]["rel_residual"]),
                 C_RES, "steered residual / ‖h‖")
     ax.axhline(rel_tol, color=C_STEER, ls="--", lw=1.2,
                label=f"alarm floor (rel_tol={rel_tol:g})")
@@ -99,12 +82,9 @@ def _panel_detection(ax, xs, groups, layers, rel_tol):
     ax.legend(fontsize=7, loc="lower left")
 
 
-def _panel_direction(ax, xs, groups, layers):
-    diff = []
-    for L in layers:
-        g = groups[L]
-        diff.append(sum(r["steer"]["margin_spent"] - r["rand"]["margin_spent"] for r in g) / len(g))
-    ax.bar(xs, diff, color=C_STEER, width=0.7)
+def _panel_direction(ax, groups, layers):
+    diff, _, _ = stat(groups, layers, lambda r: r["steer"]["margin_spent"] - r["rand"]["margin_spent"])
+    ax.bar(layers, diff, color=C_STEER, width=0.7)
     ax.axhline(0, color="0.6", lw=0.8)
     ax.set_title("Direction vs magnitude")
     ax.set_ylabel("margin spent: steer − random")
@@ -113,18 +93,16 @@ def _panel_direction(ax, xs, groups, layers):
 
 
 def plot(rows: list[dict], out: Path, rel_tol: float, model_name: str) -> None:
-    layers, groups = by_layer(rows)
+    layers, groups = group_by_layer(rows)
     n_prompts = len({r["prompt"] for r in rows})
 
     fig, axes = plt.subplots(2, 2, figsize=(13, 9))
-    _panel_margin(axes[0, 0], layers, groups, layers)
-    _panel_mechanism(axes[0, 1], layers, groups, layers)
-    _panel_detection(axes[1, 0], layers, groups, layers, rel_tol)
-    _panel_direction(axes[1, 1], layers, groups, layers)
+    _panel_margin(axes[0, 0], groups, layers)
+    _panel_mechanism(axes[0, 1], groups, layers)
+    _panel_detection(axes[1, 0], groups, layers, rel_tol)
+    _panel_direction(axes[1, 1], groups, layers)
     for ax in axes.ravel():
-        ax.set_xlabel("Hidden-state layer  (output of block i)")
-        ax.set_xticks(layers[::2])
-        ax.grid(True, alpha=0.3)
+        style_layer_axis(ax, layers)
 
     rec = sum(r["steer"]["recovered"] for r in rows) / len(rows) * 100
     det = sum(r["steer"]["detected"] for r in rows) / len(rows) * 100
@@ -135,10 +113,7 @@ def plot(rows: list[dict], out: Path, rel_tol: float, model_name: str) -> None:
         fontsize=12,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.95))
-    out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=200)
-    plt.close(fig)
-    print(f"saved {out}")
+    save_fig(fig, out)
 
 
 def main() -> None:
@@ -153,9 +128,9 @@ def main() -> None:
                    help="detection floor the audit ran with (for the headroom panel)")
     args = p.parse_args()
 
-    slug = args.model_name.replace("/", "_")
-    inp = Path(args.inp) if args.inp else Path(f"results/{slug}/steer_audit.jsonl")
-    out = Path(args.out) if args.out else Path(f"results/{slug}/steer_audit.png")
+    rdir = results_dir(args.model_name)
+    inp = Path(args.inp) if args.inp else rdir / "steer_audit.jsonl"
+    out = Path(args.out) if args.out else rdir / "steer_audit.png"
 
     rows = load_rows(inp)
     if not rows:
