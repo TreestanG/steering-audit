@@ -8,7 +8,7 @@ import torch.nn.functional as F
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from paths import model_slug
+from paths import figures_dir
 from utils import get_token_activations, load_model
 
 def load_comparisons(path):
@@ -61,16 +61,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
     parser.add_argument("--data_path", type=str, default="data/prompt_comparisons.json")
-    parser.add_argument("--results_dir", type=str, default="results")
     args = parser.parse_args()
 
     model, _ = load_model(args.model_name)
     data = load_comparisons(args.data_path)
 
     n_layers = model.config.num_hidden_layers + 1  # embed + after each block
-    graph_path = (
-        Path(args.results_dir) / model_slug(args.model_name) / "final_token_average_similarity.png"
-    )
+    graph_path = figures_dir(args.model_name) / "final_token_similarity.png"
 
     all_similarities = {}
     for category, prompts in data.items():

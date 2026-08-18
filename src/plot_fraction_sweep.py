@@ -8,7 +8,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from paths import results_dir
+from paths import experiment_dir, figures_dir
 from plot_common import THM_BOUND, first_crossing, load_rows, save_fig, style_layer_axis
 
 FRACTION_RE = re.compile(r"steer_audit_f([0-9.eE+-]+)\.jsonl$")
@@ -144,16 +144,15 @@ def main() -> None:
     p.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct",
                    help="selects the results/<slug>/ directory and titles the figure")
     p.add_argument("--in_dir", type=str, default=None,
-                   help="default: results/<slug>/fractions")
+                   help="default: results/<slug>/steer/fractions")
     p.add_argument("--out", type=str, default=None,
-                   help="default: results/<slug>/steer_fraction_sweep.png")
+                   help="default: results/<slug>/steer/figures/fraction_sweep.png")
     p.add_argument("--rel_tol", type=float, default=1e-3,
                    help="detection floor the audits ran with")
     args = p.parse_args()
 
-    rdir = results_dir(args.model_name)
-    in_dir = Path(args.in_dir) if args.in_dir else rdir / "fractions"
-    out = Path(args.out) if args.out else rdir / "steer_fraction_sweep.png"
+    in_dir = Path(args.in_dir) if args.in_dir else experiment_dir(args.model_name, "steer") / "fractions"
+    out = Path(args.out) if args.out else figures_dir(args.model_name, "steer") / "fraction_sweep.png"
 
     sweep = load_sweep(in_dir)
     if not sweep:

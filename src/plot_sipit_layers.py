@@ -7,6 +7,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from paths import experiment_dir, figures_dir
 from plot_common import THM_BOUND, load_rows, save_fig, style_layer_axis, xy
 
 # Older files store only tol, and tol = rel_tol * ‖h‖ (see sipit.match_tol),
@@ -305,17 +306,20 @@ def plot_metrics(summaries: list[dict], out: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct",
+                        help="selects the results/<slug>/ tree")
     parser.add_argument(
         "--in_dir",
         type=str,
-        default="results/Qwen_Qwen2.5-0.5B-Instruct/layers",
-        help="directory containing sipit_layer_XX.jsonl (where eval_sipit_layers.sh writes)",
+        default=None,
+        help="default: results/<slug>/sipit/layers",
     )
     parser.add_argument(
         "--out",
         type=str,
         default=None,
-        help="combined figure path; also writes one sibling PNG per panel",
+        help="default: results/<slug>/sipit/figures/layer_metrics.png; "
+        "one sibling PNG per panel is written alongside it",
     )
     parser.add_argument(
         "--rel_tol",
@@ -327,8 +331,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    in_dir = Path(args.in_dir)
-    out = Path(args.out) if args.out else in_dir / "sipit_layer_metrics.png"
+    in_dir = Path(args.in_dir) if args.in_dir else experiment_dir(args.model_name, "sipit") / "layers"
+    out = Path(args.out) if args.out else figures_dir(args.model_name, "sipit") / "layer_metrics.png"
     summaries = summarize(in_dir, rel_tol=args.rel_tol)
     plot_metrics(summaries, out)
 

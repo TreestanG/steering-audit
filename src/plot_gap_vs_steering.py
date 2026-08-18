@@ -7,6 +7,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from paths import experiment_dir, figures_dir
 from plot_common import C_RAND, C_SEP, C_STEER, save_fig
 from plot_sipit_layers import DEFAULT_REL_TOL, partial_gap_note, summarize
 
@@ -147,21 +148,27 @@ def plot(data: dict, meta: dict, out: Path, caveat: str | None = None) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--sipit_dir", type=str,
-                   default="results/Qwen_Qwen2.5-0.5B-Instruct/layers")
-    p.add_argument("--gaps", type=str, default="results/sentiment_gaps.json")
+    p.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct",
+                   help="selects the results/<slug>/ tree")
+    p.add_argument("--sipit_dir", type=str, default=None,
+                   help="default: results/<slug>/sipit/layers")
+    p.add_argument("--gaps", type=str, default=None,
+                   help="default: results/<slug>/sentiment/gaps.json")
     p.add_argument("--rel_tol", type=float, default=DEFAULT_REL_TOL,
                    help="rel_tol the SipIt sweep used; recovers ‖h‖ = tol / rel_tol")
-    p.add_argument("--out", type=str, default=None)
+    p.add_argument("--out", type=str, default=None,
+                   help="default: results/<slug>/figures/gap_vs_steering.png")
     args = p.parse_args()
 
-    sipit = summarize(Path(args.sipit_dir), rel_tol=args.rel_tol)
-    steering = load_steering(Path(args.gaps))
+    sipit_dir = Path(args.sipit_dir or experiment_dir(args.model_name, "sipit") / "layers")
+    gaps = Path(args.gaps or experiment_dir(args.model_name, "sentiment") / "gaps.json")
+    sipit = summarize(sipit_dir, rel_tol=args.rel_tol)
+    steering = load_steering(gaps)
     data = align(sipit, steering)
     if not data["layers"]:
         raise SystemExit("no overlapping layers between SipIt results and sentiment_gaps.json")
 
-    out = Path(args.out) if args.out else Path(args.sipit_dir).parent / "gap_vs_steering.png"
+    out = Path(args.out) if args.out else figures_dir(args.model_name) / "gap_vs_steering.png"
     plot(data, steering["meta"], out, caveat=partial_gap_note(sipit))
 
     print(f"\n{'L':>3}{'gap/‖h‖':>10}{'steered':>11}{'random':>10}")

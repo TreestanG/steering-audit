@@ -6,6 +6,7 @@ import numpy as np
 import torch
 
 import utils
+from paths import experiment_dir
 from utils import get_decoder_layers, get_token_activations, load_model
 
 def load_pairs(path):
@@ -103,8 +104,11 @@ def main():
     parser.add_argument("--fraction", type=float, default=0.1)
     parser.add_argument("--word_pos", type=str, default=" happy")
     parser.add_argument("--word_neg", type=str, default=" sad")
-    parser.add_argument("--out", type=Path, default=Path("results/sentiment_gaps.json"))
+    parser.add_argument("--out", type=Path, default=None,
+                        help="default: results/<slug>/sentiment/gaps.json")
     args = parser.parse_args()
+    if args.out is None:
+        args.out = experiment_dir(args.model_name, "sentiment") / "gaps.json"
 
     load_model(args.model_name)
 

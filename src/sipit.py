@@ -8,7 +8,7 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from paths import vocab_table_path
+from paths import experiment_dir, vocab_table_path
 from utils import (
     DTYPES,
     apply_final_norm,
@@ -547,19 +547,24 @@ def main():
         "--out",
         type=str,
         default=None,
-        help="write one JSON object per prompt (JSONL). flushed after each row",
+        help="default: results/<slug>/sipit/sipit.jsonl",
     )
     parser.add_argument(
         "--out_dir",
         type=str,
         default=None,
-        help="with --all_layers: write sipit_layer_XX.jsonl per layer",
+        help="default: results/<slug>/sipit/layers/",
     )
     args = parser.parse_args()
     if args.all_layers and args.out:
         parser.error("--all_layers writes per-layer jsonl; use --out_dir, not --out")
     if args.out_dir and not args.all_layers:
         parser.error("--out_dir requires --all_layers")
+    sipit_dir = experiment_dir(args.model_name, "sipit")
+    if args.all_layers:
+        args.out_dir = args.out_dir or str(sipit_dir / "layers")
+    else:
+        args.out = args.out or str(sipit_dir / "sipit.jsonl")
     schedule = tuple(int(s) for s in args.schedule.split(","))
 
     vocab_path = args.vocab_path or str(vocab_table_path(args.model_name))

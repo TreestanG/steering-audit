@@ -9,8 +9,8 @@ Sweep src/steer_audit.py over steering strengths, then overlay them on one figur
 
   --fractions A,B,...  default: 0.01,0.02,0.05,0.1,0.2,0.5,1,2
   --model_name NAME    default: Qwen/Qwen2.5-0.5B-Instruct (also picks results/<slug>/)
-  --out_dir DIR        default: results/<slug>/fractions
-  --plot_out PATH      default: results/<slug>/steer_fraction_sweep.png
+  --out_dir DIR        default: results/<slug>/steer/fractions
+  --plot_out PATH      default: results/<slug>/steer/figures/fraction_sweep.png
   --force              re-run fractions whose jsonl already exists
   --no_plot            run the audits, skip the figure
   --dry_run            print the planned runs and exit
@@ -82,8 +82,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 SLUG=${MODEL_NAME//\//_}
-[[ -n $OUT_DIR ]] || OUT_DIR=results/$SLUG/fractions
-[[ -n $PLOT_OUT ]] || PLOT_OUT=results/$SLUG/steer_fraction_sweep.png
+[[ -n $OUT_DIR ]] || OUT_DIR=results/$SLUG/steer/fractions
+[[ -n $PLOT_OUT ]] || PLOT_OUT=results/$SLUG/steer/figures/fraction_sweep.png
 
 IFS=',' read -r -a FRACTIONS <<< "$FRACTIONS_CSV"
 if [[ ${#FRACTIONS[@]} -eq 0 ]]; then

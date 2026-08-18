@@ -6,7 +6,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from paths import results_dir
+from paths import experiment_dir, figures_dir
 from plot_common import (
     THM_BOUND,
     C_GAP,
@@ -121,16 +121,15 @@ def main() -> None:
     p.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct",
                    help="selects the results/<slug>/ directory and titles the figure")
     p.add_argument("--in", dest="inp", type=str, default=None,
-                   help="default: results/<slug>/steer_audit.jsonl")
+                   help="default: results/<slug>/steer/audit.jsonl")
     p.add_argument("--out", type=str, default=None,
-                   help="default: results/<slug>/steer_audit.png")
+                   help="default: results/<slug>/steer/figures/audit.png")
     p.add_argument("--rel_tol", type=float, default=1e-3,
                    help="detection floor the audit ran with (for the headroom panel)")
     args = p.parse_args()
 
-    rdir = results_dir(args.model_name)
-    inp = Path(args.inp) if args.inp else rdir / "steer_audit.jsonl"
-    out = Path(args.out) if args.out else rdir / "steer_audit.png"
+    inp = Path(args.inp) if args.inp else experiment_dir(args.model_name, "steer") / "audit.jsonl"
+    out = Path(args.out) if args.out else figures_dir(args.model_name, "steer") / "audit.png"
 
     rows = load_rows(inp)
     if not rows:

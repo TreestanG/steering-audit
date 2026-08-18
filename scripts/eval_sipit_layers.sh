@@ -11,7 +11,7 @@ Sweep SipIt across every hidden-state layer on a stratified subset of the bank.
   --n_prompts N     default: 20, split evenly across categories
   --category NAME   repeatable; only sample from these
   --ids ID          skip sampling; invert these ids at every layer
-  --out_dir DIR     default: results/<act_dir basename>/layers
+  --out_dir DIR     default: results/<slug>/sipit/layers (from sipit.py)
   --dry_run         print selected ids and exit
 
 Everything else is forwarded to eval_sipit_single.sh (and then sipit.py).
@@ -72,10 +72,6 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
-
-if [[ -z $OUT_DIR ]]; then
-    OUT_DIR=results/$(basename "$ACT_DIR")/layers
-fi
 
 # Unique category prefixes from matching .pt files, in glob order.
 collect_cats() {
@@ -147,7 +143,7 @@ fi
 ids_csv=$(IFS=,; echo "${IDS[*]}")
 
 echo "prompts (${#IDS[@]}): ${IDS[*]}"
-echo "all layers -> $OUT_DIR/sipit_layer_XX.jsonl"
+echo "all layers -> ${OUT_DIR:-results/<slug>/sipit/layers}/sipit_layer_XX.jsonl"
 
 if [[ $DRY_RUN -eq 1 ]]; then
     exit 0
@@ -157,5 +153,5 @@ fi
     --act_dir "$ACT_DIR" \
     --ids "$ids_csv" \
     --all_layers \
-    --out_dir "$OUT_DIR" \
+    ${OUT_DIR:+--out_dir "$OUT_DIR"} \
     ${FORWARD[@]+"${FORWARD[@]}"}

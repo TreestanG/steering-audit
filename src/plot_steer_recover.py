@@ -6,7 +6,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from paths import results_dir
+from paths import experiment_dir, figures_dir
 from plot_common import (
     THM_BOUND,
     C_MARGIN,
@@ -129,17 +129,17 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
     p.add_argument("--recover", type=str, default=None,
-                   help="default: results/<slug>/steer_recover.jsonl")
+                   help="default: results/<slug>/steer/recover.jsonl")
     p.add_argument("--localize", type=str, default=None,
-                   help="default: results/<slug>/steer_localize.jsonl")
+                   help="default: results/<slug>/steer/localize.jsonl")
     p.add_argument("--out", type=str, default=None,
-                   help="default: results/<slug>/steer_recover.png")
+                   help="default: results/<slug>/steer/figures/recover.png")
     args = p.parse_args()
 
-    rdir = results_dir(args.model_name)
-    rec = Path(args.recover) if args.recover else rdir / "steer_recover.jsonl"
-    loc = Path(args.localize) if args.localize else rdir / "steer_localize.jsonl"
-    out = Path(args.out) if args.out else rdir / "steer_recover.png"
+    sdir = experiment_dir(args.model_name, "steer")
+    rec = Path(args.recover) if args.recover else sdir / "recover.jsonl"
+    loc = Path(args.localize) if args.localize else sdir / "localize.jsonl"
+    out = Path(args.out) if args.out else figures_dir(args.model_name, "steer") / "recover.png"
 
     rec_rows, loc_rows = load_rows(rec), load_rows(loc)
     if not rec_rows:

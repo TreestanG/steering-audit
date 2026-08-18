@@ -12,8 +12,8 @@ Chosen by this script (not forwarded):
   --category NAME   repeatable (base64 code other_lang natural_en weird_clean)
   --ids ID          repeatable, or comma-separated
   --limit N
-  --out PATH        default: results/sipit.jsonl (single-layer)
-  --out_dir DIR     with --all_layers: sipit_layer_XX.jsonl per layer
+  --out PATH        default: results/<slug>/sipit/sipit.jsonl (single-layer)
+  --out_dir DIR     with --all_layers: default results/<slug>/sipit/layers
 
 --act_path is chosen from --act_dir / --ids / --category / --limit.
 Everything else is forwarded to sipit.py; see its --help below.
@@ -21,7 +21,7 @@ EOF
 }
 
 ACT_DIR=data/activations/Qwen_Qwen2.5-0.5B-Instruct
-OUT=results/sipit.jsonl
+OUT=
 OUT_SET=0
 OUT_DIR=
 ALL_LAYERS=0
@@ -127,6 +127,9 @@ else
         echo "eval_sipit_single.sh: --out_dir requires --all_layers" >&2
         exit 1
     fi
-    echo "running SipIt on ${#files[@]} prompts -> $OUT"
-    uv run src/sipit.py --act_path "${files[@]}" --out "$OUT" ${SIPIT_ARGS[@]+"${SIPIT_ARGS[@]}"}
+    echo "running SipIt on ${#files[@]} prompts${OUT:+ -> $OUT}"
+    out_arg=()
+    [[ -n $OUT ]] && out_arg=(--out "$OUT")
+    uv run src/sipit.py --act_path "${files[@]}" ${out_arg[@]+"${out_arg[@]}"} \
+        ${SIPIT_ARGS[@]+"${SIPIT_ARGS[@]}"}
 fi

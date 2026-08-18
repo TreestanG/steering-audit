@@ -10,7 +10,7 @@ from torch import Tensor
 import sipit
 from sentiment_dir import _steer_hidden, build_steering_vectors, load_pairs
 from sipit import Top2
-from paths import results_dir
+from paths import experiment_dir
 from utils import (
     DTYPES,
     apply_final_norm,
@@ -292,11 +292,11 @@ def main():
         "--out",
         type=Path,
         default=None,
-        help="default: results/<model-slug>/steer_audit.jsonl, where plot_steer_audit.py looks",
+        help="default: results/<slug>/steer/audit.jsonl",
     )
     args = parser.parse_args()
     if args.out is None:
-        args.out = results_dir(args.model_name) / "steer_audit.jsonl"
+        args.out = experiment_dir(args.model_name, "steer") / "audit.jsonl"
 
     rel_tol: float = (
         rel_tol_for(DTYPES[args.dtype]) if args.rel_tol is None else float(args.rel_tol)

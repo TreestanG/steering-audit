@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 import sipit
-from paths import results_dir
+from paths import experiment_dir
 from sentiment_dir import build_steering_vectors, load_pairs
 from steer_audit import (
     build_targets,
@@ -187,7 +187,7 @@ def main() -> None:
     p.add_argument("--chunk", type=int, default=2048)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--out_dir", type=str, default=None,
-                   help="default: results/<model-slug>/")
+                   help="default: results/<slug>/steer/")
     args = p.parse_args()
 
     model, _ = load_model(args.model_name, dtype=DTYPES[args.dtype])
@@ -206,9 +206,9 @@ def main() -> None:
         p.error(f"--inject_layers {missing} not in --layers {layers}")
     prompts = [neg for _, neg in load_pairs(args.test_path)][: args.n_prompts]
 
-    out_dir = Path(args.out_dir) if args.out_dir else results_dir(args.model_name)
+    out_dir = Path(args.out_dir) if args.out_dir else experiment_dir(args.model_name, "steer")
     out_dir.mkdir(parents=True, exist_ok=True)
-    rec_path, loc_path = out_dir / "steer_recover.jsonl", out_dir / "steer_localize.jsonl"
+    rec_path, loc_path = out_dir / "recover.jsonl", out_dir / "localize.jsonl"
 
     print(f"{len(prompts)} prompts | recover {len(layers)} layers | localize {inject_layers}")
 
