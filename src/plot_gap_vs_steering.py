@@ -1,26 +1,3 @@
-"""Overlay two depth-profiles that share only the layer axis:
-
-  * gap/‖h‖  — SipIt token spacing in *activation* space (geometry of the vocab
-    manifold, no intervention). From sipit_layer_XX.jsonl, positions t>0.
-  * steered gap — the shift in logit(word_pos) − logit(word_neg) caused by adding
-    the sentiment steering vector at the last token. A causal *logit*-space
-    effect. From results/.../sentiment_gaps.json, alongside its norm-matched
-    random-direction control.
-
-These are different quantities in different units (dimensionless L2 ratio vs
-logits) measured on different prompt sets, so a single shared y-axis would be
-misleading. Panel A uses a twin y-axis; panel B min-max normalizes both to [0,1]
-so their shapes can be compared on one axis. The only honest shared coordinate is
-the layer, and layer i means the same thing on both sides: the output of the i-th
-decoder block (hidden_states[i]) — SipIt inverts it, the steering hook perturbs it.
-
-The question this answers: does the steering effect track the token crowding?
-gap/‖h‖ falls with depth (tokens crowd relative to scale) while the steered gap
-grows — i.e. steering bites hardest exactly where the geometry is most compressed.
-Panel B and the printed rank correlation quantify that, with the caveat that both
-are monotone in depth, so this is suggestive of a shared driver, not proof of one.
-"""
-
 import argparse
 import json
 import sys
@@ -33,7 +10,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from plot_sipit_layers import DEFAULT_REL_TOL, summarize
+from plot_sipit_layers import DEFAULT_REL_TOL, partial_gap_note, summarize
 
 
 def _spearman(xs: list[float], ys: list[float]) -> float | None:
@@ -153,18 +130,22 @@ def _panel_shape(ax, data):
     ax.grid(True, alpha=0.3)
 
 
-def plot(data: dict, meta: dict, out: Path) -> None:
+def plot(data: dict, meta: dict, out: Path, caveat: str | None = None) -> None:
     layers = data["layers"]
     fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
     _panel_twin(axes[0], data, meta)
     _panel_shape(axes[1], data)
     for ax in axes:
         ax.set_xticks(layers[::2] if len(layers) > 14 else layers)
-    fig.suptitle(
+    title = (
         f"gap/‖h‖ vs steered gap — {meta['model_name']}, "
-        f"fraction={meta['fraction']}, pos={meta['word_pos']!r} neg={meta['word_neg']!r}",
-        fontsize=11,
+        f"fraction={meta['fraction']}, pos={meta['word_pos']!r} neg={meta['word_neg']!r}"
     )
+    if caveat:
+        # The gap/‖h‖ side is the whole left half of the comparison, so a
+        # truncated-scan gap belongs in the title, not buried in one panel.
+        title += "\n" + caveat.replace("\n", " ")
+    fig.suptitle(title, fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.96))
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=200)
@@ -189,7 +170,7 @@ def main() -> None:
         raise SystemExit("no overlapping layers between SipIt results and sentiment_gaps.json")
 
     out = Path(args.out) if args.out else Path(args.sipit_dir).parent / "gap_vs_steering.png"
-    plot(data, steering["meta"], out)
+    plot(data, steering["meta"], out, caveat=partial_gap_note(sipit))
 
     print(f"\n{'L':>3}{'gap/‖h‖':>10}{'steered':>11}{'random':>10}")
     for i, L in enumerate(data["layers"]):

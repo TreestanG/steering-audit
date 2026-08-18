@@ -1,24 +1,3 @@
-"""Plot SipIt layer-sweep metrics from sipit_layer_XX.jsonl files.
-
-Three things drive the design here, all learned the hard way from earlier plots:
-
-  * Position 0 is a different algorithm. It is a nearest-neighbour lookup in the
-    precomputed vocab table with no forward pass, its residual is bit-exactly 0,
-    and (from layer 3 up) its activation norm is ~100x every other position
-    because that is where the attention sink lives. Averaging it in with t>0
-    produces curves that describe the sink rather than the inversion. Every
-    panel here separates them.
-
-  * Raw L2 is not comparable across depth. Activation norms grow ~47x from
-    layer 1 to 24, so residual and gap both grow for reasons that have nothing
-    to do with recovery getting harder. The scale-free quantity is
-    residual/gap, which Thm 3.2 ties to a hard bound at 0.5.
-
-  * Means hide the tail. ~92% of positions resolve in the first 32 candidates
-    and the remaining 8% do nearly all the work, so a mean over positions is
-    dominated by a handful of outliers. Panels show median with a p10-p90 band.
-"""
-
 # ‖h‖ is not stored per step, but tol is, and tol = rel_tol * ‖h‖ (see
 # sipit.match_tol), so ‖h‖ = tol / rel_tol. Anything derived from the norm
 # therefore needs the rel_tol the sweep was run with.
@@ -88,10 +67,21 @@ def _step_ratio(step: dict) -> float | None:
 
 def _gap_over_norm(step: dict, rel_tol: float) -> float | None:
     """gap as a fraction of ‖h‖ — token spacing measured in units of activation scale."""
-    tol, gap = step.get("tol"), step.get("gap")
-    if not tol or gap is None or not math.isfinite(gap) or gap <= 0:
+    gap = step.get("gap")
+    if gap is None or not math.isfinite(gap) or gap <= 0:
         return None
-    return gap / (tol / rel_tol)
+    norm = step.get("h_norm")
+    if norm is None:
+        # Old-schema fallback. Only valid for a relative-tolerance sweep: with an
+        # absolute --tol, tol is a constant and tol/rel_tol is not ‖h‖ at all, so
+        # the curve would silently become raw gap.
+        tol = step.get("tol")
+        if not tol:
+            return None
+        norm = tol / rel_tol
+    if norm <= 0:
+        return None
+    return gap / norm
 
 
 def summarize(in_dir: Path, rel_tol: float = DEFAULT_REL_TOL) -> list[dict]:
@@ -107,8 +97,11 @@ def summarize(in_dir: Path, rel_tol: float = DEFAULT_REL_TOL) -> list[dict]:
 
         ratios, res_over_tol, tried, tol_rest = [], [], [], []
         tol_pos0, sep_pos0, sep_rest = [], [], []
+        partial_gap = 0
         for row in rows:
             for t, step in enumerate(row["steps"]):
+                if t > 0 and not step.get("gap_exhaustive", False):
+                    partial_gap += 1
                 if t == 0:
                     if step.get("tol") is not None and step["tol"] > 0:
                         tol_pos0.append(step["tol"])
@@ -144,6 +137,11 @@ def summarize(in_dir: Path, rel_tol: float = DEFAULT_REL_TOL) -> list[dict]:
                 "tol_rest": _pct(tol_rest, 0.5),
                 "sep": _band(sep_rest),
                 "sep_pos0": _pct(sep_pos0, 0.5),
+                # Positions whose scan stopped early: their runner-up is the
+                # nearest of the candidates tried, not of the vocabulary, so gap
+                # is an over-estimate and residual/gap an under-estimate.
+                "partial_gap": partial_gap,
+                "n_steps": len(ratios),
             }
         )
     summaries.sort(key=lambda s: s["layer"])
@@ -175,6 +173,31 @@ def _band_panel(ax, layers, summaries, key, title, ylabel, *, log=True, color="C
     ax.set_ylabel(ylabel)
 
 
+def partial_gap_note(summaries: list[dict]) -> str | None:
+    """Caveat for gaps measured on a truncated scan, or None when all are exact.
+
+    Without --exhaustive, a position's scan stops at the first candidate inside
+    tol, so its runner-up is only the nearest of the candidates tried. The true
+    vocabulary runner-up can only be nearer, so every such gap is an upper bound
+    and every residual/gap a lower bound — the plotted margin is optimistic.
+    """
+    partial = sum(s.get("partial_gap", 0) for s in summaries)
+    total = sum(s.get("n_steps", 0) for s in summaries)
+    if not partial or not total:
+        return None
+    return (
+        f"{partial / total:.0%} of gaps from a truncated scan (no --exhaustive):\n"
+        "gap is an upper bound, so this margin is optimistic"
+    )
+
+
+def _caveat(ax, note: str | None) -> None:
+    if note:
+        ax.text(0.5, 0.02, note, transform=ax.transAxes, ha="center", va="bottom",
+                fontsize=6.5, color="C3",
+                bbox=dict(boxstyle="round", fc="white", ec="C3", alpha=0.85))
+
+
 def _panel_margin(ax, layers, summaries):
     _band_panel(ax, layers, summaries, "ratio", "Recovery margin", "residual / gap")
     worst = [s["ratio"]["max"] for s in summaries]
@@ -185,6 +208,7 @@ def _panel_margin(ax, layers, summaries):
     ax.axhline(THM_BOUND, color="C3", ls="--", lw=1.2,
                label=f"Thm 3.2 bound ({THM_BOUND})")
     ax.legend(fontsize=7, loc="best")
+    _caveat(ax, partial_gap_note(summaries))
 
 
 def _panel_exact(ax, layers, summaries):
@@ -246,6 +270,7 @@ def _panel_separation(ax, layers, summaries):
                         xy=(0.97, 0.06), xycoords="axes fraction", ha="right",
                         fontsize=7, color="C7")
     ax.legend(fontsize=7, loc="best")
+    _caveat(ax, partial_gap_note(summaries))
 
 
 def _panel_tried(ax, layers, summaries):
@@ -326,8 +351,8 @@ def main() -> None:
     parser.add_argument(
         "--in_dir",
         type=str,
-        default="results/Qwen_Qwen2.5-0.5B-Instruct",
-        help="directory containing sipit_layer_XX.jsonl",
+        default="results/Qwen_Qwen2.5-0.5B-Instruct/layers",
+        help="directory containing sipit_layer_XX.jsonl (where eval_sipit_layers.sh writes)",
     )
     parser.add_argument(
         "--out",
@@ -339,8 +364,9 @@ def main() -> None:
         "--rel_tol",
         type=float,
         default=DEFAULT_REL_TOL,
-        help="rel_tol the sweep was run with; only used to recover ‖h‖ = tol / rel_tol "
-        "for the gap/‖h‖ panel. Wrong values rescale that panel but not its shape.",
+        help="rel_tol the sweep was run with. Only a fallback for old files with no "
+        "h_norm field, where ‖h‖ = tol / rel_tol; wrong values rescale the gap/‖h‖ "
+        "panel but not its shape. Ignored once h_norm is present.",
     )
     args = parser.parse_args()
 
