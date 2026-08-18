@@ -6,10 +6,6 @@ from transformers import (
     AutoTokenizer,
     PreTrainedModel,
     PreTrainedTokenizerBase,
-    GPT2LMHeadModel,
-    GPTNeoXForCausalLM,
-    LlamaForCausalLM,
-    Qwen2ForCausalLM,
 )
 
 model: PreTrainedModel | None = None
@@ -33,15 +29,22 @@ def load_model(model_name: str) -> tuple[PreTrainedModel, PreTrainedTokenizerBas
 
 
 def get_decoder_layers() -> torch.nn.ModuleList:
-    """Return the ModuleList of transformer blocks across common HF architectures."""
+    """Return the ModuleList of transformer blocks across common HF architectures.
+
+    Matched on structure, not class identity: Mistral, Gemma, Qwen3 and Phi are
+    not LlamaForCausalLM subclasses, so an isinstance list has to be extended for
+    every new architecture instead of just working.
+    """
     if model is None:
         raise RuntimeError("Call load_model(...) before get_decoder_layers()")
-    if isinstance(model, GPTNeoXForCausalLM):
-        return model.gpt_neox.layers  # Pythia / GPT-NeoX
-    if isinstance(model, (LlamaForCausalLM, Qwen2ForCausalLM)):
-        return model.model.layers  # Llama, Qwen2, Mistral, Gemma, ...
-    if isinstance(model, GPT2LMHeadModel):
-        return model.transformer.h  # GPT-2
+    for parent, attr in (
+        ("model", "layers"),  # Llama, Qwen2/3, Mistral, Gemma, Phi, ...
+        ("transformer", "h"),  # GPT-2
+        ("gpt_neox", "layers"),  # Pythia / GPT-NeoX
+    ):
+        blocks = getattr(getattr(model, parent, None), attr, None)
+        if isinstance(blocks, torch.nn.ModuleList):
+            return blocks
     raise AttributeError(f"Don't know how to find layers on {type(model).__name__}")
 
 
