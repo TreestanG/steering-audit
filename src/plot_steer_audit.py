@@ -1,25 +1,3 @@
-"""Plot the paired steering audit from steer_audit.jsonl.
-
-Unlike plot_gap_vs_steering.py (two depth-profiles aligned only by layer index),
-every number here is measured on the same forward pass, prompt, and layer, so the
-panels are causal within a prompt rather than a cross-corpus correlation.
-
-Four findings, one panel each:
-
-  A  Margin spent (residual/gap) vs depth. A fixed-size steer eats a growing
-     share of SipIt's recovery budget as depth grows and crosses the Thm 3.2
-     safety line (0.5) in the last few layers.
-  B  Why: the residual is pinned by the steer size (~fraction·‖h‖, flat), while
-     the gap collapses with depth. margin_spent = residual/gap, so a shrinking
-     denominator, not a growing numerator, drives panel A.
-  C  Detection headroom: the steered residual sits orders of magnitude above the
-     alarm floor (rel_tol·‖h‖), so detection is saturated — recovery, not
-     detection, is where depth bites.
-  D  Direction (in)sensitivity: steering minus a norm-matched random push spends
-     identical margin until the final layer, so magnitude — not alignment — sets
-     the cost in the recovered regime.
-"""
-
 import argparse
 import json
 from pathlib import Path
@@ -72,9 +50,11 @@ def _first_crossing(xs, ys, thresh):
 def _panel_margin(ax, xs, groups, layers):
     steer = _line(ax, xs, _stat(groups, layers, lambda r: r["steer"]["margin_spent"]),
                   C_STEER, "steering")
-    _line(ax, xs, _stat(groups, layers, lambda r: r["rand"]["margin_spent"]),
-          C_RAND, "random (control)", ls="--", band=False)
-    top = max(max(steer), THM_BOUND) * 1.1
+    rand = _line(ax, xs, _stat(groups, layers, lambda r: r["rand"]["margin_spent"]),
+                 C_RAND, "random (control)", ls="--", band=False)
+    # Both curves: the control can outrun the steer, and clipping it off the top
+    # would read as the control flattening out.
+    top = max(max(steer), max(rand), THM_BOUND) * 1.1
     ax.axhspan(THM_BOUND, top, color=C_STEER, alpha=0.06)
     ax.axhline(THM_BOUND, color=C_STEER, ls="--", lw=1.2, label=f"Thm 3.2 bound ({THM_BOUND})")
     ax.set_ylim(0, top)

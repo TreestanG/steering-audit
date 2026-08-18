@@ -1,23 +1,4 @@
 #!/usr/bin/env bash
-# Sweep SipIt across every hidden-state layer on a stratified subset of the
-# trajectory bank (~20 prompts, even split per category).
-#
-# File selection (this script; not forwarded):
-#   --act_dir DIR     default: data/activations/Qwen_Qwen2.5-0.5B-Instruct
-#   --n_prompts N     default: 20, split evenly across categories
-#   --category NAME   repeatable; only sample from these
-#   --ids ID          skip sampling; invert these ids at every layer
-#   --out_dir DIR     default: results/<act_dir basename>/layers
-#   --dry_run         print selected ids and exit
-#
-# Everything else is forwarded to eval_sipit.sh (and then sipit.py).
-# sipit.py --all_layers reads the layer count from the activation tensor.
-#
-# Examples:
-#   scripts/eval_sipit_layers.sh
-#   scripts/eval_sipit_layers.sh --n_prompts 20
-#   scripts/eval_sipit_layers.sh --category code --category base64 --n_prompts 8
-
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
@@ -50,7 +31,8 @@ while [[ $# -gt 0 ]]; do
             ;;
         --ids)
             IFS=',' read -r -a parsed <<< "$2"
-            IDS+=("${parsed[@]}")
+            # bash 3.2 + set -u: "${arr[@]}" is "unbound" when arr is empty.
+            IDS+=(${parsed[@]+"${parsed[@]}"})
             shift 2
             ;;
         --dry_run)
