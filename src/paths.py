@@ -16,15 +16,29 @@ Deliberately free of torch/transformers imports so the plotters can use it
 without pulling the whole model stack in.
 """
 
+import os
 from pathlib import Path
 
 RESULTS_ROOT = Path("results")
 ACTIVATIONS_ROOT = Path("data/activations")
 
 
+def run_tag() -> str:
+    """Optional suffix on every path, from AAT_RUN_TAG (run_model.sh --tag).
+
+    One model at two dtypes otherwise collides: the slug is built from the model
+    name alone, so the second run rebuilds the first one's activations and table
+    in place and then skips every experiment stage whose sentinel already exists.
+    Empty by default, so untagged trees keep the paths they already have.
+    """
+    return os.environ.get("AAT_RUN_TAG", "").strip()
+
+
 def model_slug(model_name: str) -> str:
-    """'Qwen/Qwen2.5-0.5B-Instruct' -> 'Qwen_Qwen2.5-0.5B-Instruct'."""
-    return model_name.replace("/", "_")
+    """'Qwen/Qwen2.5-0.5B-Instruct' -> 'Qwen_Qwen2.5-0.5B-Instruct[_<tag>]'."""
+    slug = model_name.replace("/", "_")
+    tag = run_tag()
+    return f"{slug}_{tag}" if tag else slug
 
 
 def results_dir(model_name: str) -> Path:

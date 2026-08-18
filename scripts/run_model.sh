@@ -7,9 +7,12 @@ usage() {
     cat <<'EOF'
 Run the whole steering-audit pipeline for one model, from nothing to figures.
 
-  scripts/run_model.sh [MODEL] [options]
+  scripts/run_model.sh [MODEL...] [options]
 
-MODEL defaults to Qwen/Qwen2.5-0.5B-Instruct.
+MODEL defaults to Qwen/Qwen2.5-0.5B-Instruct. Several models run one after another,
+each finishing every stage before the next starts -- they share a GPU, so running
+them concurrently would just trade wall clock for OOM risk. A model that fails its
+prerequisites is abandoned and the sweep moves on to the next one.
 
 Stages, in order (each skipped when its output already exists):
   activations  save_activations.py        -> data/activations/<slug>/*.pt
@@ -27,6 +30,9 @@ Options:
   --full            real run sizes (default is a quick end-to-end validation)
   --force           re-run stages whose output already exists
   --dtype D         float32 (default) | float16 | bfloat16
+  --tag T           suffix every path with _T, so the same model can be run
+                    twice without the second run eating the first one's
+                    artifacts: --tag fp32 -> results/<slug>_fp32/
   --device D        cuda / cuda:1 / mps / cpu (default: best available)
                     Forwarded to every stage; each script also takes it directly.
   --no_plots        run the experiments, skip the figures
@@ -44,12 +50,15 @@ Note that --dtype must match the table on disk; sipit.py refuses a mismatch.
   scripts/run_model.sh gpt2                 # quick validation of a new model
   scripts/run_model.sh gpt2 --full          # real numbers
   scripts/run_model.sh Qwen/Qwen2.5-0.5B-Instruct --full --dtype float16
+  scripts/run_model.sh gpt2 Qwen/Qwen2.5-0.5B-Instruct Qwen/Qwen2.5-1.5B-Instruct \
+      --full --dtype float16                # three models, in order, one dtype
 EOF
 }
 
-MODEL=
+MODELS=()
 VV=0
 DTYPE=float32
+TAG=
 DEVICE=
 FORCE=0
 FULL=0
@@ -67,32 +76,27 @@ while [[ $# -gt 0 ]]; do
         -vv)            CHILD_LEVEL=DEBUG; VV=1; shift ;;
         -q | --quiet)   CHILD_LEVEL=WARNING; shift ;;
         --dtype)    DTYPE=$2; shift 2 ;;
+        --tag)      TAG=$2; shift 2 ;;
         --device)   DEVICE=$2; shift 2 ;;
-        --model_name) MODEL=$2; shift 2 ;;
+        --model_name) MODELS+=("$2"); shift 2 ;;
         -h | --help) usage; exit 0 ;;
         -*) echo "unknown option: $1" >&2; exit 1 ;;
-        *)  MODEL=$1; shift ;;
+        *)  MODELS+=("$1"); shift ;;
     esac
 done
-[[ -n $MODEL ]] || MODEL=Qwen/Qwen2.5-0.5B-Instruct
-SLUG=${MODEL//\//_}
+[[ ${#MODELS[@]} -gt 0 ]] || MODELS=(Qwen/Qwen2.5-0.5B-Instruct)
 
-COMMON=(--model_name "$MODEL" --dtype "$DTYPE")
-[[ -n $DEVICE ]] && COMMON+=(--device "$DEVICE")
+# Path components, so anything that would need quoting is a mistake worth naming.
+if [[ -n $TAG && ! $TAG =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "--tag must be [A-Za-z0-9._-]+, got: $TAG" >&2
+    exit 1
+fi
+# Read by paths.py, so every python stage lands in the same tagged tree without
+# each one needing its own output flag threaded through this script.
+export AAT_RUN_TAG=$TAG
 
 [[ $VV -eq 1 ]] || export TRANSFORMERS_VERBOSITY=${TRANSFORMERS_VERBOSITY:-error}
 [[ $VV -eq 1 ]] || export HF_HUB_DISABLE_PROGRESS_BARS=${HF_HUB_DISABLE_PROGRESS_BARS:-1}
-
-# Injection layers are a fraction of depth, not fixed indices: 6,12,18 does not
-# exist on a 12-layer model, and steer_recover rejects inject layers it cannot see.
-N_LAYERS=$(uv run python -c "
-from transformers import AutoConfig
-print(AutoConfig.from_pretrained('$MODEL').num_hidden_layers)" 2>/dev/null | tail -1)
-if ! [[ $N_LAYERS =~ ^[0-9]+$ ]]; then
-    echo "could not read num_hidden_layers for $MODEL" >&2
-    exit 1
-fi
-INJECT=$((N_LAYERS / 4)),$((N_LAYERS / 2)),$((3 * N_LAYERS / 4))
 
 if [[ $FULL -eq 1 ]]; then
     SIPIT_PROMPTS=20; AUDIT_PROMPTS=5; RECOVER_PROMPTS=5
@@ -104,11 +108,35 @@ else
     MODE="quick (--full for real run sizes)"
 fi
 
-ACT_DIR=data/activations/$SLUG
-RES=results/$SLUG
-LOG_DIR=$RES/logs
-FAILED=()
-mkdir -p "$LOG_DIR"
+# The figures draw an "alarm floor" at the tolerance the experiments accepted a
+# match under, and that tolerance follows --dtype. Left at the plot scripts' own
+# 1e-3 default, an fp16 run draws the floor 10x below where its audits sat, which
+# reads as detection headroom the run never had. Same dtype for every model here,
+# so this is derived once.
+REL_TOL=$(uv run python -c "
+import sys; sys.path.insert(0, 'src')
+from utils import DTYPES, rel_tol_for
+print(rel_tol_for(DTYPES['$DTYPE']))" 2>/dev/null | tail -1)
+if [[ -z $REL_TOL ]]; then
+    echo "could not derive rel_tol for --dtype $DTYPE" >&2
+    exit 1
+fi
+
+# A saved artifact carries the dtype it was built at. sipit refuses a vocab table
+# built at another one, so an existence-only sentinel would skip the rebuild and
+# surface the mismatch several stages later, after the sweep has moved on.
+# Artifacts predating --dtype carry no dtype key and are fp32; sipit's own loader
+# falls back the same way, so reporting them as float32 is what makes an fp16 run
+# rebuild them here instead of failing the mismatch check several stages later.
+# Prints nothing only when the file cannot be read at all.
+artifact_dtype() {
+    uv run python -c "
+import sys, torch
+try:
+    print(torch.load(sys.argv[1], mmap=True, weights_only=False).get('dtype') or 'float32')
+except Exception:
+    pass" "$1" 2>/dev/null | tail -1
+}
 
 # Pipeline-level narration: to the console and appended to run.log, which is the
 # only cross-stage record (per-stage logs are truncated when their stage reruns).
@@ -143,48 +171,125 @@ stage() {  # stage <name> <sentinel-glob|-> <command...>
     fi
 }
 
-say "model     $MODEL"
-say "layers    $N_LAYERS   inject at $INJECT"
-say "dtype     $DTYPE${DEVICE:+   device $DEVICE}"
-say "mode      $MODE"
-say "results   $RES/"
-say "logs      $LOG_DIR/"
-say ""
+run_one_model() {
+    local MODEL=$1
+    local SLUG=${MODEL//\//_}${TAG:+_$TAG}
 
-# Prerequisites: everything downstream reads these, so a failure here is fatal.
-stage activations "$ACT_DIR/*.pt" \
-    uv run src/save_activations.py "${COMMON[@]}" || exit 1
-stage vocab "$ACT_DIR/vocab/vocab_table.pt" \
-    uv run src/vocab_activation_table.py "${COMMON[@]}" || exit 1
+    # Injection layers are a fraction of depth, not fixed indices: 6,12,18 does not
+    # exist on a 12-layer model, and steer_recover rejects inject layers it cannot see.
+    local N_LAYERS
+    N_LAYERS=$(uv run python -c "
+from transformers import AutoConfig
+print(AutoConfig.from_pretrained('$MODEL').num_hidden_layers)" 2>/dev/null | tail -1)
+    if ! [[ $N_LAYERS =~ ^[0-9]+$ ]]; then
+        echo "could not read num_hidden_layers for $MODEL -- skipping" >&2
+        SUMMARY+=("$(printf '  %-34s could not read its config' "$MODEL")")
+        return 1
+    fi
+    local INJECT=$((N_LAYERS / 4)),$((N_LAYERS / 2)),$((3 * N_LAYERS / 4))
 
-# Experiments are independent of each other; record failures and keep going.
-stage sipit "$RES/sipit/layers/sipit_layer_00.jsonl" \
-    scripts/eval_sipit_layers.sh --act_dir "$ACT_DIR" --n_prompts "$SIPIT_PROMPTS" \
-        --model_name "$MODEL" --dtype "$DTYPE" ${DEVICE:+--device "$DEVICE"}
-stage sentiment "$RES/sentiment/gaps.json" \
-    uv run src/sentiment_dir.py "${COMMON[@]}" --fractions "$FRACTIONS"
-stage audit "$RES/steer/audit.jsonl" \
-    uv run src/steer_audit.py "${COMMON[@]}" --n_prompts "$AUDIT_PROMPTS"
-stage fractions "$RES/steer/fractions/*.jsonl" \
-    scripts/sweep_steer_fractions.sh --model_name "$MODEL" --fractions "$FRACTIONS" \
-        --n_prompts "$AUDIT_PROMPTS" --no_plot \
-        --dtype "$DTYPE" ${DEVICE:+--device "$DEVICE"}
-stage recover "$RES/steer/recover.jsonl" \
-    uv run src/steer_recover.py "${COMMON[@]}" --n_prompts "$RECOVER_PROMPTS" \
-        --inject_layers "$INJECT"
+    local COMMON=(--model_name "$MODEL" --dtype "$DTYPE")
+    [[ -n $DEVICE ]] && COMMON+=(--device "$DEVICE")
 
-if [[ $NO_PLOTS -eq 0 ]]; then
+    # Locals, but the helpers above read them: bash scopes dynamically, so say()
+    # and stage() see this model's LOG_DIR and FAILED rather than the last one's.
+    local ACT_DIR=data/activations/$SLUG
+    local RES=results/$SLUG
+    local LOG_DIR=$RES/logs
+    local FAILED=()
+    mkdir -p "$LOG_DIR"
+
+    say "model     $MODEL"
+    say "layers    $N_LAYERS   inject at $INJECT"
+    say "dtype     $DTYPE   rel_tol $REL_TOL${DEVICE:+   device $DEVICE}${TAG:+   tag $TAG}"
+    say "mode      $MODE"
+    say "results   $RES/"
+    say "logs      $LOG_DIR/"
     say ""
-    stage plot-sipit    - uv run src/plot_sipit_layers.py --model_name "$MODEL"
-    stage plot-audit    - uv run src/plot_steer_audit.py --model_name "$MODEL"
-    stage plot-fraction - uv run src/plot_fraction_sweep.py --model_name "$MODEL"
-    stage plot-recover  - uv run src/plot_steer_recover.py --model_name "$MODEL"
-    stage plot-gap      - uv run src/plot_gap_vs_steering.py --model_name "$MODEL"
-fi
 
-say ""
-if [[ ${#FAILED[@]} -gt 0 ]]; then
-    say "failed stages: ${FAILED[*]}"
-    exit 1
+    # Rebuild anything on disk that was built at a different dtype -- see artifact_dtype.
+    local act_sentinel="$ACT_DIR/*.pt"
+    local vocab_sentinel="$ACT_DIR/vocab/vocab_table.pt"
+    local have on_disk
+    have=$(ls "$ACT_DIR"/*.pt 2>/dev/null | head -1)
+    if [[ $FORCE -eq 0 && -n $have ]]; then
+        on_disk=$(artifact_dtype "$have")
+        if [[ -n $on_disk && $on_disk != "$DTYPE" ]]; then
+            say "$(printf '  %-12s on disk is %s, want %s -- rebuilding' activations "$on_disk" "$DTYPE")"
+            act_sentinel="-"
+        fi
+    fi
+    if [[ $FORCE -eq 0 && -e $vocab_sentinel ]]; then
+        on_disk=$(artifact_dtype "$vocab_sentinel")
+        if [[ -n $on_disk && $on_disk != "$DTYPE" ]]; then
+            say "$(printf '  %-12s on disk is %s, want %s -- rebuilding' vocab "$on_disk" "$DTYPE")"
+            vocab_sentinel="-"
+        fi
+    fi
+
+    # Prerequisites: everything downstream reads these, so a failure here ends this
+    # model -- but only this one, so the rest of the sweep still gets its shot.
+    stage activations "$act_sentinel" \
+        uv run src/save_activations.py "${COMMON[@]}" || { model_failed "$MODEL"; return 1; }
+    stage vocab "$vocab_sentinel" \
+        uv run src/vocab_activation_table.py "${COMMON[@]}" || { model_failed "$MODEL"; return 1; }
+
+    # Experiments are independent of each other; record failures and keep going.
+    stage sipit "$RES/sipit/layers/sipit_layer_00.jsonl" \
+        scripts/eval_sipit_layers.sh --act_dir "$ACT_DIR" --n_prompts "$SIPIT_PROMPTS" \
+            --model_name "$MODEL" --dtype "$DTYPE" ${DEVICE:+--device "$DEVICE"}
+    stage sentiment "$RES/sentiment/gaps.json" \
+        uv run src/sentiment_dir.py "${COMMON[@]}" --fractions "$FRACTIONS"
+    stage audit "$RES/steer/audit.jsonl" \
+        uv run src/steer_audit.py "${COMMON[@]}" --n_prompts "$AUDIT_PROMPTS"
+    stage fractions "$RES/steer/fractions/*.jsonl" \
+        scripts/sweep_steer_fractions.sh --model_name "$MODEL" --fractions "$FRACTIONS" \
+            --n_prompts "$AUDIT_PROMPTS" --no_plot \
+            --dtype "$DTYPE" ${DEVICE:+--device "$DEVICE"}
+    stage recover "$RES/steer/recover.jsonl" \
+        uv run src/steer_recover.py "${COMMON[@]}" --n_prompts "$RECOVER_PROMPTS" \
+            --inject_layers "$INJECT"
+
+    if [[ $NO_PLOTS -eq 0 ]]; then
+        say ""
+        stage plot-sipit    - uv run src/plot_sipit_layers.py --model_name "$MODEL"
+        stage plot-audit    - uv run src/plot_steer_audit.py --model_name "$MODEL" --rel_tol "$REL_TOL"
+        stage plot-fraction - uv run src/plot_fraction_sweep.py --model_name "$MODEL" --rel_tol "$REL_TOL"
+        stage plot-recover  - uv run src/plot_steer_recover.py --model_name "$MODEL"
+        stage plot-gap      - uv run src/plot_gap_vs_steering.py --model_name "$MODEL" --rel_tol "$REL_TOL"
+    fi
+
+    say ""
+    if [[ ${#FAILED[@]} -gt 0 ]]; then
+        say "failed stages: ${FAILED[*]}"
+        SUMMARY+=("$(printf '  %-34s FAILED: %s' "$MODEL" "${FAILED[*]}")")
+        return 1
+    fi
+    [[ $DRY_RUN -eq 1 ]] || say "done -> $RES/   (logs in $LOG_DIR/)"
+    SUMMARY+=("$(printf '  %-34s ok -> %s/' "$MODEL" "$RES")")
+}
+
+# A prerequisite failure has no stage list worth printing -- it is always the one
+# that just failed, and its log path is already on screen.
+model_failed() {
+    SUMMARY+=("$(printf '  %-34s FAILED: %s' "$1" "${FAILED[*]}")")
+}
+
+SUMMARY=()
+rc=0
+idx=0
+for MODEL in "${MODELS[@]}"; do
+    if [[ ${#MODELS[@]} -gt 1 ]]; then
+        idx=$((idx + 1))
+        printf '\n===== [%d/%d] %s =====\n' "$idx" "${#MODELS[@]}" "$MODEL" >&2
+    fi
+    run_one_model "$MODEL" || rc=1
+done
+
+# One place to look after an unattended sweep, since each model narrates into its
+# own run.log and nothing else spans them.
+if [[ ${#MODELS[@]} -gt 1 ]]; then
+    printf '\n===== %d models =====\n' "${#MODELS[@]}" >&2
+    printf '%s\n' ${SUMMARY[@]+"${SUMMARY[@]}"} >&2
 fi
-[[ $DRY_RUN -eq 1 ]] || say "done -> $RES/   (logs in $LOG_DIR/)"
+exit $rc

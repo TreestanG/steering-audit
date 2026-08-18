@@ -8,6 +8,7 @@ usage() {
 Sweep src/steer_audit.py over steering strengths, then overlay them on one figure.
 
   --fractions A,B,...  default: 0.01,0.02,0.05,0.1,0.2,0.5,1,2
+  --rel_tol T          default: follows --dtype (fp32 1e-3, fp16 1e-2, bf16 5e-2)
   --model_name NAME    default: Qwen/Qwen2.5-0.5B-Instruct (also picks results/<slug>/)
   --out_dir DIR        default: results/<slug>/steer/fractions
   --plot_out PATH      default: results/<slug>/steer/figures/fraction_sweep.png
@@ -28,8 +29,10 @@ PLOT_OUT=
 FORCE=0
 DO_PLOT=1
 DRY_RUN=0
-REL_TOL=1e-3
+REL_TOL=
+DTYPE=float32
 AUDIT_ARGS=()
+AAT_RUN_TAG=${AAT_RUN_TAG:-}
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -45,6 +48,11 @@ while [[ $# -gt 0 ]]; do
         --rel_tol)
             REL_TOL=$2
             AUDIT_ARGS+=(--rel_tol "$2")
+            shift 2
+            ;;
+        --dtype)
+            DTYPE=$2
+            AUDIT_ARGS+=(--dtype "$2")
             shift 2
             ;;
         --out_dir)
@@ -82,7 +90,23 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-SLUG=${MODEL_NAME//\//_}
+# steer_audit derives its acceptance tolerance from --dtype, and the figure draws
+# that same number as its alarm floor. Reading it from one place keeps the drawn
+# line and the audits it describes from silently diverging on a non-fp32 run.
+if [[ -z $REL_TOL ]]; then
+    REL_TOL=$(uv run python -c "
+import sys; sys.path.insert(0, 'src')
+from utils import DTYPES, rel_tol_for
+print(rel_tol_for(DTYPES['$DTYPE']))" 2>/dev/null | tail -1)
+    if [[ -z $REL_TOL ]]; then
+        echo "could not derive rel_tol for --dtype $DTYPE" >&2
+        exit 1
+    fi
+fi
+
+# Matches paths.model_slug: run_model.sh exports AAT_RUN_TAG so a tagged run
+# does not write its fractions into the untagged tree.
+SLUG=${MODEL_NAME//\//_}${AAT_RUN_TAG:+_$AAT_RUN_TAG}
 [[ -n $OUT_DIR ]] || OUT_DIR=results/$SLUG/steer/fractions
 [[ -n $PLOT_OUT ]] || PLOT_OUT=results/$SLUG/steer/figures/fraction_sweep.png
 
@@ -95,6 +119,7 @@ fi
 mkdir -p "$OUT_DIR"
 
 echo "model      $MODEL_NAME"
+echo "dtype      $DTYPE   rel_tol $REL_TOL"
 echo "fractions  ${FRACTIONS[*]}"
 echo "out        $OUT_DIR/steer_audit_f<fraction>.jsonl"
 [[ $DO_PLOT -eq 1 ]] && echo "figure     $PLOT_OUT"
