@@ -1,6 +1,7 @@
 import argparse
 import copy
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -29,8 +30,13 @@ DEFAULT_SCHEDULE: tuple[int, ...] = (32, 96, 384, 1536, 6144, 24576)
 logger = get_logger(__name__)
 
 # Cap a candidate batch so expanding the prefix KV cache doesn't OOM.
+# The budget counts the expanded prefix cache only -- model weights, the deepcopy
+# made before batch_repeat_interleave, and output_hidden_states all sit on top of
+# it, so the real peak is roughly 2x this plus the weights. 6 GB suits a machine
+# with headroom; MHA models (Pythia: no GQA, so 3.4x the KV/token of Qwen-7B) at
+# fp32 on 24 GB need it lower. AAT_KV_BUDGET overrides it in bytes.
 MAX_BATCH = 4096
-KV_BUDGET_BYTES = 6_000_000_000
+KV_BUDGET_BYTES = int(os.environ.get("AAT_KV_BUDGET") or 6_000_000_000)
 
 
 def kv_bytes_per_token() -> int:
@@ -173,6 +179,23 @@ def next_token_logits(hidden_last: Tensor) -> Tensor:
     return head(hidden_last)[0].float().cpu()
 
 
+def abs_position_embedding() -> torch.nn.Module | None:
+    """The learned absolute position embedding, if this architecture uses one.
+
+    Rotary and ALiBi models inject position inside attention, so their layer-0
+    state is the token embedding alone. GPT-2 style models instead add wpe[pos]
+    to it, and dropping that term leaves every layer-0 candidate off by exactly
+    ||wpe[pos]|| -- a token-independent error that shifts all candidates equally,
+    so the scan still ranks them sensibly but no candidate ever clears tol.
+    """
+    base = get_base_model()
+    for attr in ("wpe", "position_embeddings"):
+        mod = getattr(base, attr, None)
+        if isinstance(mod, torch.nn.Embedding):
+            return mod
+    return None
+
+
 @torch.no_grad()
 def candidate_states(cache, prefix_len: int, candidates: Tensor, layer: int) -> Tensor:
     """h_layer at the appended position for each candidate. [n_cands, hidden]"""
@@ -181,7 +204,11 @@ def candidate_states(cache, prefix_len: int, candidates: Tensor, layer: int) -> 
     n = candidates.shape[0]
 
     if layer == 0:
-        return model.get_input_embeddings()(candidates.to(device)).float().cpu()
+        h = model.get_input_embeddings()(candidates.to(device))
+        pos = abs_position_embedding()
+        if pos is not None:  # candidate sits at index prefix_len, right after the prefix
+            h = h + pos.weight[prefix_len].to(h.dtype)
+        return h.float().cpu()
 
     batch_cache = copy.deepcopy(cache)
     batch_cache.batch_repeat_interleave(n)
