@@ -13,4 +13,9 @@ wheels/
 .venv
 */activations/
 
-results/
+# Experiment outputs: keep figures and the small summaries so the README renders;
+# the per-prompt records regenerate from scripts/run_model.sh.
+results/**
+!results/**/
+!results/**/figures/*.png
+!results/*/sentiment/gaps.json
