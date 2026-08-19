@@ -72,8 +72,11 @@ def match_tol(target: Tensor, rel_tol: float, abs_tol: float) -> float:
 
 def load_vocab_table(
     path: str, expect_model: str | None = None, expect_dtype: str | None = None
-) -> Tensor:
-    """[vocab, n_layers, hidden] solo-token states, mmapped so pages load on demand.
+) -> tuple[Tensor, str]:
+    """Solo-token states, mmapped so pages load on demand.
+
+    Returns (table, layout). Tables written before the layout key are vocab-major
+    ([vocab, n_layers, hidden]); new ones are layer-major ([n_layers, vocab, hidden]).
 
     Refuses a table built for a different model: the shapes are often compatible,
     so the mismatch would otherwise surface as silently wrong inversions.
@@ -95,17 +98,19 @@ def load_vocab_table(
                 f"--model_name {expect_model} --dtype {expect_dtype} "
                 f"(mismatched {flag} makes every residual meaningless)"
             )
-    return blob["activations"]
+    return blob["activations"], str(blob.get("layout", "vocab_major"))
 
 
-def load_vocab_layer(table: Tensor, layer: int) -> Tensor:
-    """[vocab, hidden] slice at one layer, in fp32. Materializes ~‖V‖x hidden floats.
+def load_vocab_layer(table: Tensor, layer: int, layout: str = "vocab_major") -> Tensor:
+    """[vocab, hidden] slice at one layer, in fp32.
 
-    The table is stored at the model's dtype; the distances are compared against
-    targets and tolerances computed in fp32, so the cast happens once here rather
-    than being left to type promotion inside the chunked scan.
+    Layer-major slices are one contiguous read; vocab-major ones stride the whole
+    file, which is what made large tables unusable. The table is stored at the
+    model's dtype and distances are computed in fp32, so the cast happens once
+    here rather than being left to type promotion inside the chunked scan.
     """
-    return table[:, layer, :].float().contiguous()
+    rows = table[layer] if layout == "layer_major" else table[:, layer, :]
+    return rows.float().contiguous()
 
 
 def dists_to(vec: Tensor, table: Tensor, chunk: int = 8192) -> Tensor:
@@ -614,8 +619,11 @@ def main():
     # Opened once: re-loading per layer re-mmaps the whole table and re-materializes
     # a fresh [vocab, hidden] slice each time, for no gain over letting the page
     # cache serve the same mapping.
-    vocab_table = load_vocab_table(vocab_path, expect_model=args.model_name,
-                                   expect_dtype=args.dtype)
+    vocab_table, vocab_layout = load_vocab_table(vocab_path, expect_model=args.model_name,
+                                                 expect_dtype=args.dtype)
+    if vocab_layout != "layer_major":
+        logger.warning("%s is vocab-major: each layer read strides the whole file. "
+                       "Rebuild for large models.", vocab_path)
 
     if args.all_layers:
         n_layers = n_layers_in(args.act_path[0])
@@ -627,7 +635,7 @@ def main():
         for layer in range(n_layers):
             out = out_dir / f"sipit_layer_{layer:02d}.jsonl" if out_dir else None
             logger.info("layer %02d/%d", layer, last)
-            vocab_layer = load_vocab_layer(vocab_table, layer)
+            vocab_layer = load_vocab_layer(vocab_table, layer, vocab_layout)
             n, ok = run_layer(
                 args.act_path, tokenizer, vocab_layer, gold_by_id,
                 layer=layer, out=out, **run_kw,
@@ -639,7 +647,7 @@ def main():
         return
 
     layer = 12 if args.layer is None else args.layer
-    vocab_layer = load_vocab_layer(vocab_table, layer)
+    vocab_layer = load_vocab_layer(vocab_table, layer, vocab_layout)
     run_layer(
         args.act_path,
         tokenizer,

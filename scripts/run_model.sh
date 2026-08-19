@@ -177,15 +177,23 @@ run_one_model() {
 
     # Injection layers are a fraction of depth, not fixed indices: 6,12,18 does not
     # exist on a 12-layer model, and steer_recover rejects inject layers it cannot see.
+    local probe_err
+    probe_err=$(mktemp)
     local N_LAYERS
     N_LAYERS=$(uv run python -c "
 from transformers import AutoConfig
-print(AutoConfig.from_pretrained('$MODEL').num_hidden_layers)" 2>/dev/null | tail -1)
+print(AutoConfig.from_pretrained('$MODEL').num_hidden_layers)" 2>"$probe_err" | tail -1)
     if ! [[ $N_LAYERS =~ ^[0-9]+$ ]]; then
+        # Surface the real cause: gated repos, typos and auth failures all used to
+        # collapse into one useless "could not read" line because stderr was discarded.
         echo "could not read num_hidden_layers for $MODEL -- skipping" >&2
+        grep -E "OSError|GatedRepo|401|403|not a local folder|Repository Not Found|ConnectionError" \
+            "$probe_err" | head -3 | sed 's/^/      /' >&2
+        rm -f "$probe_err"
         SUMMARY+=("$(printf '  %-34s could not read its config' "$MODEL")")
         return 1
     fi
+    rm -f "$probe_err"
     local INJECT=$((N_LAYERS / 4)),$((N_LAYERS / 2)),$((3 * N_LAYERS / 4))
 
     local COMMON=(--model_name "$MODEL" --dtype "$DTYPE")

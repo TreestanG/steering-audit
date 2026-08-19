@@ -32,7 +32,12 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "vocab_table.pt"
 
-    # Disk-backed rather than anonymous memory. The table is vocab x n_layers x
+    # Laid out layer-major, [n_layers, vocab, hidden]. Vocab-major means one
+    # layer's slice is strided across the whole file, so extracting it touches
+    # every byte: a 43 GB 3B table thrashed a 26 GB machine into swap death after
+    # ~35 such reads. Layer-major makes each slice one contiguous read.
+    #
+    # Disk-backed rather than anonymous memory. The table is n_layers x vocab x
     # hidden — 13 GB for a 152k vocab at 0.5B/fp32 — and holding all of it
     # resident until torch.save runs gets the process OOM-killed after every
     # forward pass has already been paid for. Pages of a shared file mapping are
@@ -48,7 +53,7 @@ def main():
         shared=True,
         size=vocab_size * n_layers * hidden,
         dtype=dtype,
-    ).view(vocab_size, n_layers, hidden)
+    ).view(n_layers, vocab_size, hidden)
 
     try:
         for start in range(0, vocab_size, args.batch_size):
@@ -58,8 +63,8 @@ def main():
                 hidden_states = model(
                     input_ids=input_ids, output_hidden_states=True
                 ).hidden_states
-            stacked = torch.stack([h[:, 0] for h in hidden_states], dim=1)  # [B, n_layers, H]
-            table[start:end] = stacked.cpu()
+            stacked = torch.stack([h[:, 0] for h in hidden_states], dim=0)  # [n_layers, B, H]
+            table[:, start:end] = stacked.cpu()
             heartbeat(logger, end, vocab_size, "vocab")
 
         torch.save(
@@ -67,6 +72,7 @@ def main():
                 "activations": table,
                 "model_name": args.model_name,
                 "dtype": args.dtype,
+                "layout": "layer_major",
                 "device": args.device,
                 "vocab_size": vocab_size,
             },
@@ -77,7 +83,7 @@ def main():
         scratch.unlink(missing_ok=True)
     logger.info(
         "vocab table [%d, %d, %d] %s (%.1f GB) -> %s",
-        vocab_size, n_layers, hidden, args.dtype,
+        n_layers, vocab_size, hidden, args.dtype,
         vocab_size * n_layers * hidden * dtype.itemsize / 1e9, path,
     )
 
