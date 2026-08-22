@@ -1,6 +1,9 @@
 # Local agent notes (not for the repo)
 AGENT.md
 
+# Secrets: FIREWORKS_KEY / FIREWORKS_API_KEY for the Llama Guard judge
+.env
+
 # Python-generated files
 __pycache__/
 *.py[oc]
@@ -19,3 +22,5 @@ results/**
 !results/**/
 !results/**/figures/*.png
 !results/*/sentiment/gaps.json
+!results/*/behavior/*/gaps.json
+!results/*/behavior/*/evaluations.json
