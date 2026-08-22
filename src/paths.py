@@ -5,10 +5,12 @@ Layout, one directory per experiment, data and figures kept apart:
     results/<slug>/
         sipit/       sipit.jsonl, layers/sipit_layer_XX.jsonl
                      figures/layer_metrics*.png
-        steer/       audit.jsonl, recover.jsonl, localize.jsonl,
+        steer/       audit.jsonl, recover.jsonl, localize.jsonl (sentiment),
+                     <behavior>/audit.jsonl + fractions/ for the others,
                      fractions/steer_audit_f<fraction>.jsonl
                      figures/audit.png, recover.png, fraction_sweep.png
-        sentiment/   gaps.json
+        sentiment/   gaps.json  (the sentiment behavior, kept at its old path)
+        behavior/    <name>/gaps.json, completions.jsonl, evaluations.json
         pgd/         pgd_<objective>_b<budget>.{jsonl,json}
         figures/     cross-experiment figures (gap_vs_steering.png, ...)
         logs/        one log per pipeline stage, plus run.log
@@ -81,3 +83,29 @@ def activations_dir(model_name: str, root: str | Path = ACTIVATIONS_ROOT) -> Pat
 
 def vocab_table_path(model_name: str, root: str | Path = ACTIVATIONS_ROOT) -> Path:
     return activations_dir(model_name, root) / "vocab" / "vocab_table.pt"
+
+
+def behavior_dir(model_name: str, behavior: str) -> Path:
+    """Where one behavior's efficacy results go.
+
+    'sentiment' keeps results/<slug>/sentiment/ rather than moving under behavior/:
+    every figure in the README, plot_gap_vs_steering's default and
+    pgd_attack.best_steering_layer's default all point at that path, and eight
+    completed runs already have a gaps.json sitting there. The special case is one
+    line; renaming would invalidate all of it for no gain.
+    """
+    if behavior == "sentiment":
+        return results_dir(model_name) / "sentiment"
+    return results_dir(model_name) / "behavior" / behavior
+
+
+def steer_dir(model_name: str, behavior: str = "sentiment") -> Path:
+    """Where one behavior's DETECTION results go, mirroring behavior_dir.
+
+    Same reasoning: 'sentiment' stays at results/<slug>/steer/ because the finished
+    audits, the fraction sweeps and both plotters' defaults already live there, and
+    anything else gets its own subtree so two behaviors' audits cannot overwrite
+    each other's audit.jsonl.
+    """
+    base = results_dir(model_name) / "steer"
+    return base if behavior == "sentiment" else base / behavior
