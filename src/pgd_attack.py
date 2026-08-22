@@ -6,10 +6,18 @@ from pathlib import Path
 import torch
 from torch import Tensor
 
+import behaviors
+import prompt_format
 from log import add_logging_args, get_logger
 from log import setup as log_setup
-from paths import experiment_dir, logs_dir
-from sentiment_dir import build_steering_vectors, efficacy, load_pairs, token_id
+from paths import behavior_dir, experiment_dir, logs_dir
+from steering import (
+    build_steering_vectors,
+    efficacy,
+    first_token_id,
+    refusal_token_ids,
+    token_id,
+)
 from utils import (
     DTYPES,
     add_model_args,
@@ -23,7 +31,7 @@ from utils import (
 
 logger = get_logger(__name__)
 
-OBJECTIVES = ("sentiment", "cw")
+OBJECTIVES = ("sentiment", "cw", "target", "refusal")
 CONSTRAINTS = ("all", "injection")
 ARMS = ("caa", "random", "pgd")
 
@@ -57,32 +65,71 @@ def _warn_if_not_fp32() -> None:
         )
 
 
-def clean_reference(prompts: str | list[str], layer: int) -> dict:
+def _encode_with_targets(prompts: list[str], targets: list[str]):
+    _, tokenizer = require_model()
+    prompt_ids = [tokenizer.encode(p) for p in prompts]
+    target_ids = [tokenizer.encode(t, add_special_tokens=False) for t in targets]
+    width = max(len(p) + len(t) for p, t in zip(prompt_ids, target_ids))
+    span = max(len(t) for t in target_ids)
+    pad = tokenizer.pad_token_id
+
+    input_ids = torch.full((len(prompts), width), pad, dtype=torch.long)
+    mask = torch.zeros((len(prompts), width), dtype=torch.long)
+    read_at = torch.zeros((len(prompts), span), dtype=torch.long)
+    tokens = torch.zeros((len(prompts), span), dtype=torch.long)
+    keep = torch.zeros((len(prompts), span), dtype=torch.bool)
+    for i, (p, t) in enumerate(zip(prompt_ids, target_ids)):
+        input_ids[i, : len(p) + len(t)] = torch.tensor(p + t)
+        mask[i, : len(p) + len(t)] = 1
+        read_at[i, : len(t)] = torch.arange(len(p) - 1, len(p) - 1 + len(t))
+        tokens[i, : len(t)] = torch.tensor(t)
+        keep[i, : len(t)] = True
+    prompt_end = torch.tensor([len(p) - 1 for p in prompt_ids])
+    return {"input_ids": input_ids, "attention_mask": mask}, read_at, tokens, keep, prompt_end
+
+
+def clean_reference(prompts: str | list[str], layer: int,
+                    targets: list[str] | None = None) -> dict:
     model, tokenizer = require_model()
     device = model_device()
     if isinstance(prompts, str):
         prompts = [prompts]
-    encoded = tokenizer(prompts, return_tensors="pt", padding=True, padding_side="right")
-    inputs = {k: v.to(device) for k, v in encoded.items()}
-    mask = inputs["attention_mask"]
-    positions = mask.sum(dim=1) - 1  # [batch], each row's own last real token
+    target_span = None
+    if targets is None:
+        encoded = tokenizer(prompts, return_tensors="pt", padding=True, padding_side="right")
+        inputs = {k: v.to(device) for k, v in encoded.items()}
+        positions = inputs["attention_mask"].sum(dim=1) - 1
+    else:
+        if len(targets) != len(prompts):
+            raise ValueError(f"{len(targets)} targets for {len(prompts)} prompts")
+        encoded, read_at, tokens, keep, prompt_end = _encode_with_targets(prompts, targets)
+        inputs = {k: v.to(device) for k, v in encoded.items()}
+        positions = prompt_end.to(device)
+        target_span = {"read_at": read_at.to(device), "tokens": tokens.to(device),
+                       "keep": keep.to(device)}
     with torch.no_grad():
         out = model(**inputs, output_hidden_states=True, use_cache=False)
     rows = torch.arange(len(prompts), device=device)
     states = {k: h[rows, positions].detach().float() for k, h in enumerate(out.hidden_states)}
     if layer not in states or layer < 1:
         raise ValueError(f"layer {layer} out of range 1..{len(states) - 1}")
-    return {
+    reference = {
         "prompts": list(prompts),
         "layer": layer,
         "batch": len(prompts),
         "inputs": inputs,
         "positions": positions,
         "rows": rows,
-        "logits": out.logits[rows, positions].detach().float(),  # [batch, vocab]
-        "states": states,                                        # {depth: [batch, hidden]}
-        "h_norm": states[layer].norm(dim=-1),                    # [batch]
+        "targets": list(targets) if targets is not None else None,
+        "target_span": target_span,
+        "logits": out.logits[rows, positions].detach().float(),
+        "states": states,
+        "h_norm": states[layer].norm(dim=-1),
     }
+    reference["target_logprob"] = (
+        target_logprob(out.logits, reference).detach() if target_span is not None else None
+    )
+    return reference
 
 
 def _run_with_delta(clean: dict, layer: int, delta: Tensor, *, want_states: bool):
@@ -119,27 +166,60 @@ def _rel_devs_from(out, state: Tensor, clean: dict, layer: int) -> dict[int, Ten
         h_clean = clean["states"][k]
         h_steer = (steered_at_layer if k == layer
                    else out.hidden_states[k][rows, positions].float())
-        devs[k] = (h_steer - h_clean).norm(dim=-1) / h_clean.norm(dim=-1)  # [batch]
+        devs[k] = (h_steer - h_clean).norm(dim=-1) / h_clean.norm(dim=-1)
     return devs
 
 
 @torch.no_grad()
 def _rel_deviations(delta: Tensor, clean: dict, layer: int) -> dict[int, Tensor]:
-    """_rel_devs_from over its own forward pass. One per projection backoff round."""
     out, state = _run_with_delta(clean, layer, delta, want_states=True)
     assert state is not None
     return _rel_devs_from(out, state, clean, layer)
 
 
-def _objective(logits: Tensor, kind: str, clean: dict, word_pos: str, word_neg: str) -> Tensor:
+def target_logprob(full_logits: Tensor, clean: dict) -> Tensor:
+    span = clean["target_span"]
+    if span is None:
+        raise ValueError("objective 'target' needs a target per prompt; "
+                         "clean_reference was built without one")
+    rows = clean["rows"].unsqueeze(-1).expand_as(span["read_at"])
+    picked = full_logits[rows, span["read_at"]]
+    logprobs = torch.log_softmax(picked.float(), dim=-1)
+    got = logprobs.gather(-1, span["tokens"].unsqueeze(-1)).squeeze(-1)
+    keep = span["keep"].to(got.dtype)
+    return (got * keep).sum(dim=-1) / keep.sum(dim=-1)
+
+
+def _refusal_ids(clean: dict) -> Tensor:
+    ids = clean.get("_refusal_ids")
+    if ids is None:
+        ids = torch.tensor(refusal_token_ids(), device=clean["logits"].device)
+        clean["_refusal_ids"] = ids
+    return ids
+
+
+def _id(word) -> int:
+    return word if isinstance(word, int) else token_id(word)
+
+
+def _objective(logits: Tensor, kind: str, clean: dict, word_pos: str, word_neg: str,
+               full_logits: Tensor | None = None) -> Tensor:
     if kind == "sentiment":
-        return logits[:, token_id(word_pos)] - logits[:, token_id(word_neg)]
+        return logits[:, _id(word_pos)] - logits[:, _id(word_neg)]
     if kind == "cw":
-        c = clean["logits"].argmax(dim=-1)                       # [batch]
+        c = clean["logits"].argmax(dim=-1)
         mask = torch.zeros_like(logits, dtype=torch.bool)
         mask[clean["rows"], c] = True
         best_other = logits.masked_fill(mask, float("-inf")).max(dim=-1).values
         return best_other - logits[clean["rows"], c]
+    if kind == "target":
+        if full_logits is None:
+            raise ValueError("objective 'target' needs the full logits tensor")
+        return target_logprob(full_logits, clean)
+    if kind == "refusal":
+        probs = torch.softmax(logits.float(), dim=-1)
+        refusal = probs[:, _refusal_ids(clean)].sum(dim=-1).clamp(1e-8, 1 - 1e-8)
+        return -(torch.log(refusal) - torch.log1p(-refusal))
     raise ValueError(f"objective must be one of {OBJECTIVES}, got {kind!r}")
 
 
@@ -167,7 +247,11 @@ def evaluate_deltas(
         assert state is not None
         steered = out.logits[clean["rows"], clean["positions"]].detach().float()
         devs = _rel_devs_from(out, state, clean, layer)
-        objs = {k: _objective(steered, k, clean, word_pos, word_neg) for k in OBJECTIVES}
+        computable = [k for k in OBJECTIVES
+                      if k != "target" or clean["target_span"] is not None]
+        objs = {k: _objective(steered, k, clean, word_pos, word_neg, out.logits)
+                for k in computable}
+        clean_target = clean.get("target_logprob")
 
     _, tokenizer = require_model()
     clean_top = clean["logits"].argmax(dim=-1)
@@ -199,8 +283,12 @@ def evaluate_deltas(
         }
         if budget is not None:
             record["boundary_frac"] = _ratio(max_rel_dev, budget)
-        for kind in OBJECTIVES:
-            record[f"obj_{kind}"] = float(objs[kind][b])
+        for kind, values in objs.items():
+            record[f"obj_{kind}"] = float(values[b])
+        if clean_target is not None:
+            record["target_logprob"] = float(objs["target"][b])
+            record["target_logprob_clean"] = float(clean_target[b])
+            record["d_target_logprob"] = float(objs["target"][b] - clean_target[b])
         records.append(record)
     return records
 
@@ -216,7 +304,6 @@ def _as_batch(delta: Tensor, clean: dict) -> Tensor:
 
 def evaluate_delta(prompt: str, layer: int, delta: Tensor, *, clean: dict,
                    word_pos: str, word_neg: str, budget: float | None = None) -> dict:
-    """Single-prompt evaluate_deltas, for callers that hold one prompt at a time."""
     if clean["batch"] != 1 or clean["prompts"][0] != prompt:
         raise ValueError("`clean` was built for a different (prompt, layer)")
     return evaluate_deltas(layer, delta, clean=clean, word_pos=word_pos,
@@ -250,7 +337,7 @@ def _project(
     max_backoff: int = MAX_BACKOFF,
 ) -> Tensor:
     model, _ = require_model()
-    radius = (budget * clean["h_norm"]).unsqueeze(-1)  # [batch, 1]
+    radius = (budget * clean["h_norm"]).unsqueeze(-1)
 
     def ball(d: Tensor) -> Tensor:
         norm = d.norm(dim=-1, keepdim=True).clamp_min(1e-30)
@@ -262,7 +349,7 @@ def _project(
         return delta
 
     def worst(d: Tensor) -> Tensor:
-        devs = _rel_deviations(d, clean, layer)  # {depth: [batch]}
+        devs = _rel_deviations(d, clean, layer)
         return (torch.stack(list(devs.values())).max(dim=0).values if constraint == "all"
                 else devs[layer])
 
@@ -291,20 +378,23 @@ def pgd_attack_batch(
     seed: int = 0,
     seeds: list[int] | None = None,
     max_backoff: int = MAX_BACKOFF,
+    targets: list[str] | None = None,
 ) -> list[dict]:
     if objective not in OBJECTIVES:
         raise ValueError(f"objective must be one of {OBJECTIVES}, got {objective!r}")
+    if objective == "target" and targets is None:
+        raise ValueError("objective 'target' needs a target continuation per prompt")
     if constraint not in CONSTRAINTS:
         raise ValueError(f"constraint must be one of {CONSTRAINTS}, got {constraint!r}")
     _warn_if_not_fp32()
 
     model, _ = require_model()
-    clean = clean_reference(prompts, layer)
+    clean = clean_reference(prompts, layer, targets)
     device = model_device()
     batch, hidden = clean["batch"], model.config.hidden_size
-    radius = budget * clean["h_norm"]                                   # [batch]
+    radius = budget * clean["h_norm"]
     lr0 = (0.1 * radius if lr is None
-           else torch.full_like(radius, float(lr))).unsqueeze(-1)       # [batch, 1]
+           else torch.full_like(radius, float(lr))).unsqueeze(-1)
 
     if seeds is None:
         seeds = [seed + b for b in range(batch)]
@@ -333,15 +423,14 @@ def pgd_attack_batch(
             leaf = delta.detach().clone().requires_grad_(True)
             out, _ = _run_with_delta(clean, layer, leaf, want_states=False)
             logits = out.logits[clean["rows"], clean["positions"]].float()
-            value = _objective(logits, objective, clean, word_pos, word_neg)
+            value = _objective(logits, objective, clean, word_pos, word_neg, out.logits)
             (grad,) = torch.autograd.grad(value.sum(), leaf)
-            grad_norm = grad.norm(dim=-1, keepdim=True)                 # [batch, 1]
+            grad_norm = grad.norm(dim=-1, keepdim=True)
             if not bool(torch.isfinite(grad_norm).all()):
                 logger.debug("batch %s: non-finite gradient at step %d, stopping", name, step)
                 break
             decay = 1.0 - 0.9 * step / max(1, steps - 1)
             with torch.no_grad():
-                # A row whose gradient has vanished simply stops moving; the rest continue.
                 direction = grad / grad_norm.clamp_min(1e-30)
                 delta = project(leaf.detach() + lr0 * decay * direction)
 
@@ -382,9 +471,6 @@ def pgd_attack(prompt: str, layer: int, **kwargs) -> dict:
     return pgd_attack_batch([prompt], layer, **kwargs)[0]
 
 
-# --------------------------------------------------------------------------- as a run
-
-
 def caa_delta(direction: Tensor, scale: Tensor, fraction: float) -> Tensor:
     return fraction * scale * direction / direction.norm()
 
@@ -412,7 +498,7 @@ def _aggregate(rows: list[dict]) -> list[dict]:
         def mean(field, at=at):
             return sum(r[field] for r in at) / len(at)
 
-        out.append({
+        entry = {
             "constraint": key[0],
             "arm": key[1],
             "n": len(at),
@@ -425,20 +511,26 @@ def _aggregate(rows: list[dict]) -> list[dict]:
             "boundary_frac_mean": mean("boundary_frac"),
             "detected_at_layer_rate": mean("detected_at_layer"),
             "detected_multilayer_rate": mean("detected_multilayer"),
-        })
+        }
+        if "d_target_logprob" in at[0]:
+            entry["d_target_logprob_mean"] = mean("d_target_logprob")
+        out.append(entry)
     return out
 
 
 def _log_table(summary: list[dict]) -> None:
-    logger.info("%9s %7s %4s %6s %10s %9s %10s %10s %9s %8s %8s",
+    has_target = any("d_target_logprob_mean" in s for s in summary)
+    logger.info("%9s %7s %4s %6s %10s %9s %10s %10s %9s %8s %8s%s",
                 "scope", "arm", "n", "flip%", "gap", "KL",
-                "rel_delta", "max_dev", "bnd_frac", "det@L%", "det>=L%")
+                "rel_delta", "max_dev", "bnd_frac", "det@L%", "det>=L%",
+                "   d_target" if has_target else "")
     for s in summary:
-        logger.info("%9s %7s %4d %5.0f%% %10.4f %9.4f %10.2e %10.2e %9.3f %7.0f%% %7.0f%%",
+        logger.info("%9s %7s %4d %5.0f%% %10.4f %9.4f %10.2e %10.2e %9.3f %7.0f%% %7.0f%%%s",
                     s["constraint"], s["arm"], s["n"], 100 * s["flip_rate"],
                     s["gap_mean"], s["kl_mean"], s["rel_delta_mean"], s["max_rel_dev_mean"],
                     s["boundary_frac_mean"], 100 * s["detected_at_layer_rate"],
-                    100 * s["detected_multilayer_rate"])
+                    100 * s["detected_multilayer_rate"],
+                    f"  {s['d_target_logprob_mean']:+9.5f}" if has_target else "")
 
 
 def _csv(value: str, allowed: tuple[str, ...], flag: str) -> list[str]:
@@ -456,13 +548,30 @@ def main():
     )
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
     add_model_args(parser, default_dtype="float32")
-    parser.add_argument("--train_path", type=str, default="data/sentiment_opposites_train.json")
-    parser.add_argument("--test_path", type=str, default="data/sentiment_opposites_test.json")
+    parser.add_argument("--behavior", type=str, default="sentiment",
+                        help=f"one of {', '.join(behaviors.list_behaviors())}, or a path. "
+                             f"Supplies the contrast pairs the CAA arm is fitted on, the "
+                             f"prompts to attack, and the targets the 'target' objective "
+                             f"drives toward")
+    parser.add_argument("--arm", type=str, default=None,
+                        help="test arm to attack (default: the dataset's default_arm; "
+                             "'harmful' is the one to use for jbb_refusal)")
     parser.add_argument("--n_prompts", type=int, default=0,
-                        help="0 (default) = every pair in --test_path, so flip_rate shares "
-                             "a denominator with gaps.json")
-    parser.add_argument("--word_pos", type=str, default=" happy")
-    parser.add_argument("--word_neg", type=str, default=" sad")
+                        help="0 (default) = the whole arm, so flip_rate shares a "
+                             "denominator with gaps.json")
+    parser.add_argument("--word_pos", type=str, default=None,
+                        help="token the 'sentiment' objective pushes up "
+                             "(default: the first token of the behavior's positive target)")
+    parser.add_argument("--word_neg", type=str, default=None,
+                        help="token it pushes down (default: the behavior's negative target)")
+    parser.add_argument("--prompt_format", type=str, default="auto",
+                        choices=list(prompt_format.FORMATS),
+                        help="must match the behavior_eval and steer_audit runs this "
+                             "attack is compared against")
+    parser.add_argument("--target_side", type=str, default="neg", choices=["pos", "neg"],
+                        help="which of the behavior's targets the 'target' objective "
+                             "drives toward. 'neg' is the attack: for jbb_refusal that is "
+                             "JailbreakBench's own affirmative 'Sure, here is ...' string")
     parser.add_argument("--layer", type=int, default=None,
                         help="default: the model's best steering layer, per --gaps")
     parser.add_argument("--gaps", type=Path, default=None,
@@ -527,9 +636,12 @@ def main():
         raise SystemExit(f"--budget must be positive, got {budget:g}")
     rel_tol = args.rel_tol if args.rel_tol is not None else _ratio(budget, args.budget_frac)
 
+    behavior = behaviors.load_behavior(args.behavior)
+    arm_name = args.arm or behavior.default_arm
     if args.out is None:
-        args.out = (experiment_dir(args.model_name, "pgd")
-                    / f"pgd_{args.objective}_b{budget:g}.jsonl")
+        stem = (f"pgd_{args.objective}_b{budget:g}" if behavior.name == "sentiment"
+                else f"pgd_{behavior.name}_{arm_name}_{args.objective}_b{budget:g}")
+        args.out = experiment_dir(args.model_name, "pgd") / f"{stem}.jsonl"
     summary_path = args.out.with_suffix(".json")
     if summary_path.exists() and not args.force:
         logger.info("%s exists — run already finished; --force to redo", summary_path)
@@ -540,14 +652,33 @@ def main():
     _warn_if_not_fp32()
     model, _ = require_model()
 
-    gaps_path = args.gaps or experiment_dir(args.model_name, "sentiment") / "gaps.json"
+    gaps_path = args.gaps or behavior_dir(args.model_name, behavior.name) / "gaps.json"
     layer = (args.layer if args.layer is not None
              else best_steering_layer(gaps_path, args.fraction, args.allow_final_layer))
-    pairs = load_pairs(args.test_path)
-    if args.n_prompts > 0:
-        pairs = pairs[: args.n_prompts]
-    prompts = [neg for _, neg in pairs]
 
+    fmt = prompt_format.resolve_format(args.prompt_format, behavior)
+    items = behavior.items(arm_name, args.n_prompts)
+    prompts = prompt_format.render_prompts(behavior, items, fmt)
+
+    def _first(side: str) -> int:
+        text = behavior.targets.get(side) or items[0].target
+        if text is None:
+            raise SystemExit(f"{behavior.name}: no {side} target to resolve a token from; "
+                             f"pass --word_{side}")
+        return first_token_id(text)
+
+    word_pos = args.word_pos if args.word_pos is not None else _first("pos")
+    word_neg = args.word_neg if args.word_neg is not None else _first("neg")
+
+    targets = None
+    if args.objective == "target":
+        targets = [behavior.target_for(item, args.target_side) for item in items]
+        missing = [i.index for i, t in zip(items, targets) if t is None]
+        if missing:
+            raise SystemExit(f"{behavior.name}: items {missing[:5]} have no "
+                             f"{args.target_side} target, which the 'target' objective needs")
+
+    logger.info("behavior %s, arm %s: %d prompts", behavior.name, arm_name, len(prompts))
     logger.info("layer %d (%s), budget %g = %g * rel_tol %g [%s], objective %s",
                 layer, "given" if args.layer is not None else f"best in {gaps_path}",
                 budget, args.budget_frac, rel_tol, args.budget_dtype, args.objective)
@@ -556,7 +687,8 @@ def main():
 
     steering = None
     if "caa" in arms:
-        steering = build_steering_vectors(load_pairs(args.train_path), layers=[layer])
+        steering = build_steering_vectors(
+            prompt_format.render_contrast_pairs(behavior, fmt), layers=[layer])
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     done: dict[tuple[str, str, str], dict] = {}
@@ -573,6 +705,9 @@ def main():
     base = {
         "model_name": args.model_name,
         "dtype": args.dtype,
+        "behavior": behavior.name,
+        "test_arm": arm_name,
+        "prompt_format": fmt,
         "layer": layer,
         "budget": budget,
         "rel_tol": rel_tol,
@@ -592,17 +727,18 @@ def main():
                     chunk = todo[start : start + args.batch_size]
                     idxs = [i for i, _ in chunk]
                     batch_prompts = [p for _, p in chunk]
-                    clean = clean_reference(batch_prompts, layer)
+                    batch_targets = [targets[i] for i in idxs] if targets else None
+                    clean = clean_reference(batch_prompts, layer, batch_targets)
                     extras: list[dict] = [{} for _ in chunk]
 
                     if arm == "pgd":
                         results = pgd_attack_batch(
                             batch_prompts, layer, budget=budget,
-                            word_pos=args.word_pos, word_neg=args.word_neg,
+                            word_pos=word_pos, word_neg=word_neg,
                             steps=args.steps, lr=args.lr, objective=args.objective,
                             constraint=constraint, n_restarts=args.n_restarts,
                             seeds=[args.seed + i for i in idxs],
-                            max_backoff=args.max_backoff,
+                            max_backoff=args.max_backoff, targets=batch_targets,
                         )
                         batch_deltas = [r.pop("delta") for r in results]
                         records = []
@@ -638,7 +774,7 @@ def main():
                         batch_deltas = [delta[b] for b in range(len(chunk))]
                         records = evaluate_deltas(
                             layer, delta, clean=clean, budget=budget,
-                            word_pos=args.word_pos, word_neg=args.word_neg,
+                            word_pos=word_pos, word_neg=word_neg,
                         )
 
                     for b, (i, prompt) in enumerate(chunk):
@@ -672,8 +808,9 @@ def main():
         "n_restarts": args.n_restarts,
         "seed": args.seed,
         "n_prompts": len(prompts),
-        "word_pos": args.word_pos,
-        "word_neg": args.word_neg,
+        "word_pos": word_pos,
+        "word_neg": word_neg,
+        "target_side": args.target_side if args.objective == "target" else None,
         "rows": str(args.out),
         "summary": summary,
     }, indent=2) + "\n")
