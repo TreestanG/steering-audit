@@ -1,42 +1,14 @@
-"""The steering behaviors under test, loaded from data/behavior_<name>.json.
-
-One schema covers five datasets that are not shaped alike, so the loader normalises
-two construction forms rather than making every dataset pretend to be the other:
-
-    system_contrast   (refusal, jbb_refusal, evil_persona, language_fr)
-        A pos_system / neg_system pair and a list of train_questions. The contrast
-        pair for a question is the same question under each system prompt, which is
-        the persona-vector construction: everything except the behavior is held
-        fixed, so the difference-in-means isolates it.
-
-    prompt_pairs      (sentiment)
-        Explicit (positive, negative) prompt pairs. The behavior is carried by the
-        prompt's own wording, so there is no system prompt to vary.
-
-Evaluation prompts come from `test_arms` and are rendered with `test_template`,
-which deliberately carries NO system prompt: the direction was fitted with the
-system prompts, so at eval time the steering vector has to supply the behavior on
-its own. Anything that leaves the system prompt in is measuring instruction
-following, not steering.
-
-Deliberately free of torch/transformers imports -- the scorers, the judge and the
-dataset stats want this module without paying for the model stack.
-"""
-
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
 DATA_ROOT = Path("data")
 
-# Both construction forms; `kind` defaults to system_contrast because four of the
-# five datasets use it and only sentiment has to say so.
 SYSTEM_CONTRAST = "system_contrast"
 PROMPT_PAIRS = "prompt_pairs"
 
 
 def behavior_path(name_or_path: str) -> Path:
-    """'refusal' -> data/behavior_refusal.json; a path is taken as given."""
     path = Path(name_or_path)
     if path.suffix == ".json" or path.exists():
         return path
@@ -49,13 +21,6 @@ def list_behaviors(root: Path = DATA_ROOT) -> list[str]:
 
 @dataclass(frozen=True)
 class Item:
-    """One evaluation instruction, with whatever the dataset knew about it.
-
-    `target` is the affirmative continuation JailbreakBench ships per behavior
-    ("Sure, here is ..."). It is None for the datasets whose targets are global,
-    and Behavior.target_for() is what resolves the two cases.
-    """
-
     index: int
     question: str
     target: str | None = None
@@ -82,15 +47,7 @@ class Behavior:
     description: str = ""
     source: str = ""
 
-    # -- fitting the direction ------------------------------------------------
-
     def contrast_pairs(self) -> list[tuple[str, str]]:
-        """(positive, negative) prompt pairs, in the shape build_steering_vectors wants.
-
-        Positive means "exhibits the behavior": refusing, hostile, French, happy.
-        The steering vector therefore points toward the behavior, and a negative
-        fraction points away from it -- which is how the jailbreak arm is run.
-        """
         if self.kind == PROMPT_PAIRS:
             return [tuple(pair) for pair in self.train_pairs]
         assert self.template is not None
@@ -99,8 +56,6 @@ class Behavior:
              self.template.format(system=self.neg_system, question=q))
             for q in self.train_questions
         ]
-
-    # -- evaluating -----------------------------------------------------------
 
     def arm_names(self) -> list[str]:
         return list(self.arms)
@@ -119,13 +74,6 @@ class Behavior:
         return [self.prompt_for(item) for item in self.items(arm, n)]
 
     def target_for(self, item: Item, side: str) -> str | None:
-        """The teacher-forced continuation for one side, per item.
-
-        A dataset-level target wins; a null one falls back to the item's own, which
-        is how JailbreakBench's per-behavior affirmative targets ("Sure, here is a
-        defamatory article ...") reach the negative side while the refusal side
-        stays a single shared string.
-        """
         if side not in ("pos", "neg"):
             raise ValueError(f"side must be 'pos' or 'neg', got {side!r}")
         target = self.targets.get(side)
@@ -135,7 +83,6 @@ class Behavior:
 
 
 def _items(raw: list, arm: str) -> tuple[Item, ...]:
-    """Accept both shapes a test arm comes in: bare strings, or dicts with metadata."""
     out = []
     for i, entry in enumerate(raw):
         if isinstance(entry, str):
