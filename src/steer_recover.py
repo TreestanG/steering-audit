@@ -11,7 +11,7 @@ import sipit
 from log import add_logging_args, get_logger
 from log import setup as log_setup
 from paths import experiment_dir, logs_dir
-from sentiment_dir import build_steering_vectors, load_pairs
+from steering import build_steering_vectors, load_pairs
 from steer_audit import (
     build_targets,
     layer_states,
@@ -40,11 +40,7 @@ def recover_prompt(
     seed: int,
     chunk: int,
 ) -> list[dict]:
-    """δ̂ = h'_steer − (clean state of the SipIt-recovered token), scored against known δ."""
     prefix, true_id, cache = prefix_cache(prompt)
-    # The clean target rides along so margin_spent divides by the CLEAN gap, matching
-    # steer_audit. The steered scan's own gap collapses at high fraction (nearest and
-    # runner-up become near-equidistant), which made the old ratio meaningless.
     targets, deltas = build_targets(prompt, steering, layers=layers, fraction=fraction, seed=seed)
     tracked = scan_vocab(cache, len(prefix), targets, chunk)
 
@@ -52,18 +48,17 @@ def recover_prompt(
     for layer in layers:
         row = {"prompt": prompt, "layer": layer, "true_token": true_id}
         clean_gap = tracked[layer, "clean"].gap
-        # One early-exit forward recovers the clean state of both winning tokens.
         win_ids = [tracked[layer, "steer"].best_id, tracked[layer, "rand"].best_id]
         h_hat = sipit.candidate_states(cache, len(prefix), torch.tensor(win_ids), layer)
         for j, kind in enumerate(("steer", "rand")):
             t = tracked[layer, kind]
-            delta_hat = targets[layer, kind] - h_hat[j]  # observed − recovered-clean
+            delta_hat = targets[layer, kind] - h_hat[j]
             delta_true = deltas[layer][kind]
             row[kind] = {
                 "recovered_token": t.best_id,
                 "recovered": t.best_id == true_id,
                 "residual": t.best,
-                "gap": t.gap,  # this scan's own runner-up spread, as in steer_audit
+                "gap": t.gap,
                 "margin_spent": t.best / clean_gap if clean_gap > 0 else float("inf"),
                 "cos": cosine(delta_hat, delta_true),
                 "norm_ratio": float(delta_hat.norm() / delta_true.norm()),
@@ -85,14 +80,8 @@ def localize_prompt(
     chunk: int,
     takeoff_mult: float,
 ) -> list[dict]:
-    """Inject at each of inject_layers; residual takes off at the injection point.
-
-    Every injection is scored in ONE vocab scan, and the clean side is forwarded
-    and scanned once: the clean profile depends only on the prompt, so computing
-    it per injection would repeat a full-vocabulary pass for an identical answer.
-    """
     prefix, _, cache = prefix_cache(prompt)
-    layers = sorted(layers)  # takeoff is "first layer to clear the floor"
+    layers = sorted(layers)
 
     targets: dict[tuple[int, str], Tensor] = {
         (L, "clean"): h for L, h in layer_states(prompt, layers).items()
@@ -199,13 +188,11 @@ def main() -> None:
 
     model, _ = load_model(args.model_name, dtype=DTYPES[args.dtype], device=args.device)
     logger.info("model on %s, %s", model_device(), args.dtype)
-    steering = build_steering_vectors(load_pairs(args.train_path))  # CPU fp32, see there
+    steering = build_steering_vectors(load_pairs(args.train_path))
 
     n_layers = model.config.num_hidden_layers
     layers = sorted(int(s) for s in args.layers.split(",")) if args.layers else list(range(1, n_layers + 1))
     inject_layers = sorted(int(s) for s in args.inject_layers.split(",") if s)
-    # An injection at a layer that is never captured cannot be detected, so it
-    # would silently score as a miss rather than as the misconfiguration it is.
     missing = [L for L in inject_layers if L not in layers]
     if missing:
         p.error(f"--inject_layers {missing} not in --layers {layers}")

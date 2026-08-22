@@ -2,7 +2,7 @@ import argparse
 
 import torch
 
-from sentiment_dir import build_steering_vectors, load_pairs, make_add_vector_hook
+from steering import build_steering_vectors, load_pairs, make_add_vector_hook
 from log import add_logging_args, get_logger
 from log import setup as log_setup
 from paths import logs_dir
@@ -45,8 +45,6 @@ def main():
         hook_fn = make_add_vector_hook(direction, scale, args.fraction)
         delta_expected = steering_delta(direction, scale, args.fraction)
 
-        # Raw block output on both sides: the final norm is nonlinear, so
-        # post-norming layer 24 would break steered - base == delta.
         base = layer_state(args.prompt, layer, post_norm=False)
         steered = layer_state(args.prompt, layer, hook_fn=hook_fn, post_norm=False)
         delta = steered - base
