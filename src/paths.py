@@ -9,6 +9,7 @@ Layout, one directory per experiment, data and figures kept apart:
                      fractions/steer_audit_f<fraction>.jsonl
                      figures/audit.png, recover.png, fraction_sweep.png
         sentiment/   gaps.json
+        pgd/         pgd_<objective>_b<budget>.{jsonl,json}
         figures/     cross-experiment figures (gap_vs_steering.png, ...)
         logs/        one log per pipeline stage, plus run.log
 
@@ -23,15 +24,28 @@ RESULTS_ROOT = Path("results")
 ACTIVATIONS_ROOT = Path("data/activations")
 
 
+# The suffix each dtype gets when no explicit tag is given. Strings, not torch
+# dtypes, so this module stays importable by the plotters without torch.
+DTYPE_TAGS = {"float32": "fp32", "float16": "fp16", "bfloat16": "bf16"}
+
+
 def run_tag() -> str:
-    """Optional suffix on every path, from AAT_RUN_TAG (run_model.sh --tag).
+    """Suffix on every path: AAT_RUN_TAG if set, else the dtype in AAT_DTYPE.
 
     One model at two dtypes otherwise collides: the slug is built from the model
     name alone, so the second run rebuilds the first one's activations and table
     in place and then skips every experiment stage whose sentinel already exists.
-    Empty by default, so untagged trees keep the paths they already have.
+
+    That guard used to be a flag someone had to remember, and it drifted — the
+    logs show an fp32 activations stage inside pythia-1.4b's otherwise-fp16 tree,
+    and both dtypes inside gpt2's sipit and vocab stages. So the dtype now supplies
+    the tag on its own (utils.add_model_args exports AAT_DTYPE), and AAT_RUN_TAG
+    stays available to override it for a non-dtype axis: --tag seed7, --tag rerun.
     """
-    return os.environ.get("AAT_RUN_TAG", "").strip()
+    tag = os.environ.get("AAT_RUN_TAG", "").strip()
+    if tag:
+        return tag
+    return DTYPE_TAGS.get(os.environ.get("AAT_DTYPE", "").strip(), "")
 
 
 def model_slug(model_name: str) -> str:

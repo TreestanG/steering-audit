@@ -1,4 +1,5 @@
 import argparse
+import os
 from typing import cast
 
 import torch
@@ -56,6 +57,21 @@ def resolve_device(requested: str) -> torch.device:
     return device
 
 
+class _DtypeArg(argparse.Action):
+    """Record --dtype in the environment as well as the namespace.
+
+    paths.run_tag() reads it, so results/<slug>_fp16/ and results/<slug>_fp32/
+    separate themselves without anyone passing --tag. It has to happen here rather
+    than in load_model(): every entry point builds its output paths from
+    experiment_dir()/logs_dir() before it loads any weights, so a hook at load time
+    would fire after the paths were already decided.
+    """
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+        os.environ["AAT_DTYPE"] = str(values)
+
+
 def add_model_args(parser: argparse.ArgumentParser, *, default_dtype: str = "float32") -> None:
     """--device / --dtype, spelled the same way by every entry point.
 
@@ -67,9 +83,15 @@ def add_model_args(parser: argparse.ArgumentParser, *, default_dtype: str = "flo
         "--device", type=str, default=pick_device(),
         help="cuda / cuda:1 / mps / cpu (default: the best one available here)",
     )
+    # argparse never fires an action for a default, so the default is published here,
+    # at parser-build time, and _DtypeArg overwrites it only if --dtype is passed.
+    # setdefault, not assignment: a tag already exported by run_model.sh wins.
+    os.environ.setdefault("AAT_DTYPE", default_dtype)
     parser.add_argument(
         "--dtype", type=str, default=default_dtype, choices=list(DTYPES),
-        help=f"model compute dtype (default: {default_dtype})",
+        action=_DtypeArg,
+        help=f"model compute dtype (default: {default_dtype}); also selects the "
+             f"results/<slug>_<tag>/ tree unless --tag overrides it",
     )
 
 
