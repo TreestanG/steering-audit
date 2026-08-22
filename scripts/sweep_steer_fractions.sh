@@ -76,7 +76,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --fraction | --out)
-            echo "sweep_steer_fractions.sh sets --fraction / --out per run; use --fractions / --out_dir" >&2
+            echo "sweep_steer_fractions.sh sets --fractions / --out_dir; use those" >&2
             exit 1
             ;;
         -h | --help)
@@ -90,9 +90,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# steer_audit derives its acceptance tolerance from --dtype, and the figure draws
-# that same number as its alarm floor. Reading it from one place keeps the drawn
-# line and the audits it describes from silently diverging on a non-fp32 run.
 if [[ -z $REL_TOL ]]; then
     REL_TOL=$(uv run python -c "
 import sys; sys.path.insert(0, 'src')
@@ -104,9 +101,12 @@ print(rel_tol_for(DTYPES['$DTYPE']))" 2>/dev/null | tail -1)
     fi
 fi
 
-# Matches paths.model_slug: run_model.sh exports AAT_RUN_TAG so a tagged run
-# does not write its fractions into the untagged tree.
-SLUG=${MODEL_NAME//\//_}${AAT_RUN_TAG:+_$AAT_RUN_TAG}
+export AAT_DTYPE=${AAT_DTYPE:-$DTYPE}
+TAG=${AAT_RUN_TAG:-$(uv run python -c "
+import sys; sys.path.insert(0, 'src')
+from paths import DTYPE_TAGS
+print(DTYPE_TAGS.get('$DTYPE', ''))" 2>/dev/null | tail -1)}
+SLUG=${MODEL_NAME//\//_}${TAG:+_$TAG}
 [[ -n $OUT_DIR ]] || OUT_DIR=results/$SLUG/steer/fractions
 [[ -n $PLOT_OUT ]] || PLOT_OUT=results/$SLUG/steer/figures/fraction_sweep.png
 
@@ -131,27 +131,27 @@ if [[ $DRY_RUN -eq 1 ]]; then
     exit 0
 fi
 
-failed=()
+TODO=()
 for frac in "${FRACTIONS[@]}"; do
-    out=$OUT_DIR/steer_audit_f${frac}.jsonl
-    if [[ -s $out && $FORCE -eq 0 ]]; then
-        echo "======== fraction $frac -- exists, skipping ($out) ========"
-        continue
-    fi
-    echo "======== fraction $frac -> $out ========"
-    # Write to .partial first: a run killed mid-sweep must not leave a truncated
-    # jsonl that the next --force-less invocation would treat as complete.
-    if uv run src/steer_audit.py \
-        --fraction "$frac" \
-        --out "$out.partial" \
-        ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"}; then
-        mv "$out.partial" "$out"
+    if [[ -s $OUT_DIR/steer_audit_f${frac}.jsonl && $FORCE -eq 0 ]]; then
+        echo "======== fraction $frac -- exists, skipping ========"
     else
-        echo "fraction $frac FAILED" >&2
-        rm -f "$out.partial"
-        failed+=("$frac")
+        TODO+=("$frac")
     fi
 done
+
+failed=()
+if [[ ${#TODO[@]} -gt 0 ]]; then
+    TODO_CSV=$(IFS=,; echo "${TODO[*]}")
+    echo "======== fractions $TODO_CSV -> $OUT_DIR ========"
+    if ! uv run src/steer_audit.py \
+        --fractions "$TODO_CSV" \
+        --out_dir "$OUT_DIR" \
+        ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"}; then
+        echo "fractions $TODO_CSV FAILED" >&2
+        failed=("${TODO[@]}")
+    fi
+fi
 
 if [[ ${#failed[@]} -gt 0 ]]; then
     echo "failed fractions: ${failed[*]}" >&2

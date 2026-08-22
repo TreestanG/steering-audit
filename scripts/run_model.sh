@@ -18,7 +18,7 @@ Stages, in order (each skipped when its output already exists):
   activations  save_activations.py        -> data/activations/<slug>/*.pt
   vocab        vocab_activation_table.py  -> data/activations/<slug>/vocab/vocab_table.pt
   sipit        eval_sipit_layers.sh       -> results/<slug>/sipit/layers/
-  sentiment    sentiment_dir.py           -> results/<slug>/sentiment/gaps.json
+  sentiment    behavior_eval.py           -> results/<slug>/sentiment/gaps.json
   audit        steer_audit.py             -> results/<slug>/steer/audit.jsonl
   fractions    sweep_steer_fractions.sh   -> results/<slug>/steer/fractions/
   recover      steer_recover.py           -> results/<slug>/steer/{recover,localize}.jsonl
@@ -30,9 +30,10 @@ Options:
   --full            real run sizes (default is a quick end-to-end validation)
   --force           re-run stages whose output already exists
   --dtype D         float32 (default) | float16 | bfloat16
-  --tag T           suffix every path with _T, so the same model can be run
-                    twice without the second run eating the first one's
-                    artifacts: --tag fp32 -> results/<slug>_fp32/
+  --tag T           suffix every path with _T. Defaults to the dtype (fp32 /
+                    fp16 / bf16), which is what keeps two precisions of one model
+                    from overwriting each other; pass it only to separate runs on
+                    some other axis, e.g. --tag seed7
   --device D        cuda / cuda:1 / mps / cpu (default: best available)
                     Forwarded to every stage; each script also takes it directly.
   --no_plots        run the experiments, skip the figures
@@ -52,6 +53,12 @@ Note that --dtype must match the table on disk; sipit.py refuses a mismatch.
   scripts/run_model.sh Qwen/Qwen2.5-0.5B-Instruct --full --dtype float16
   scripts/run_model.sh gpt2 Qwen/Qwen2.5-0.5B-Instruct Qwen/Qwen2.5-1.5B-Instruct \
       --full --dtype float16                # three models, in order, one dtype
+
+This is the SENTIMENT pipeline: one behavior, single-token metrics, plus the SipIt
+and recomputation audits that do not depend on a behavior at all. The refusal,
+evil-persona, language and JailbreakBench behaviors -- and every multi-token metric,
+including ASR -- live in scripts/run_behavior.sh, which reuses the artifacts this
+one builds.
 EOF
 }
 
@@ -86,13 +93,21 @@ while [[ $# -gt 0 ]]; do
 done
 [[ ${#MODELS[@]} -gt 0 ]] || MODELS=(Qwen/Qwen2.5-0.5B-Instruct)
 
-# Path components, so anything that would need quoting is a mistake worth naming.
 if [[ -n $TAG && ! $TAG =~ ^[A-Za-z0-9._-]+$ ]]; then
     echo "--tag must be [A-Za-z0-9._-]+, got: $TAG" >&2
     exit 1
 fi
-# Read by paths.py, so every python stage lands in the same tagged tree without
-# each one needing its own output flag threaded through this script.
+export AAT_DTYPE=$DTYPE
+if [[ -z $TAG ]]; then
+    TAG=$(uv run python -c "
+import sys; sys.path.insert(0, 'src')
+from paths import DTYPE_TAGS
+print(DTYPE_TAGS.get('$DTYPE', ''))" 2>/dev/null | tail -1)
+    if [[ -z $TAG ]]; then
+        echo "could not derive a run tag for --dtype $DTYPE" >&2
+        exit 1
+    fi
+fi
 export AAT_RUN_TAG=$TAG
 
 [[ $VV -eq 1 ]] || export TRANSFORMERS_VERBOSITY=${TRANSFORMERS_VERBOSITY:-error}
@@ -108,11 +123,6 @@ else
     MODE="quick (--full for real run sizes)"
 fi
 
-# The figures draw an "alarm floor" at the tolerance the experiments accepted a
-# match under, and that tolerance follows --dtype. Left at the plot scripts' own
-# 1e-3 default, an fp16 run draws the floor 10x below where its audits sat, which
-# reads as detection headroom the run never had. Same dtype for every model here,
-# so this is derived once.
 REL_TOL=$(uv run python -c "
 import sys; sys.path.insert(0, 'src')
 from utils import DTYPES, rel_tol_for
@@ -122,13 +132,6 @@ if [[ -z $REL_TOL ]]; then
     exit 1
 fi
 
-# A saved artifact carries the dtype it was built at. sipit refuses a vocab table
-# built at another one, so an existence-only sentinel would skip the rebuild and
-# surface the mismatch several stages later, after the sweep has moved on.
-# Artifacts predating --dtype carry no dtype key and are fp32; sipit's own loader
-# falls back the same way, so reporting them as float32 is what makes an fp16 run
-# rebuild them here instead of failing the mismatch check several stages later.
-# Prints nothing only when the file cannot be read at all.
 artifact_dtype() {
     uv run python -c "
 import sys, torch
@@ -138,13 +141,11 @@ except Exception:
     pass" "$1" 2>/dev/null | tail -1
 }
 
-# Pipeline-level narration: to the console and appended to run.log, which is the
-# only cross-stage record (per-stage logs are truncated when their stage reruns).
 say() { printf '%s\n' "$*" | tee -a "$LOG_DIR/run.log" >&2; }
 
 exists() { local f; for f in $1; do [[ -e $f ]] && return 0; done; return 1; }
 
-stage() {  # stage <name> <sentinel-glob|-> <command...>
+stage() {
     local name=$1 sentinel=$2; shift 2
     if [[ $FORCE -eq 0 && $sentinel != "-" ]] && exists "$sentinel"; then
         say "$(printf '  %-12s skip (have %s)' "$name" "$sentinel")"
@@ -155,16 +156,13 @@ stage() {  # stage <name> <sentinel-glob|-> <command...>
         return 0
     fi
     local log=$LOG_DIR/$name.log
-    : > "$log"   # truncate once per stage; the children append to it
+    : > "$log"
     say "$(printf '  %-12s start   %s' "$name" "$log")"
     local t0=$SECONDS rc=0
-    # No redirection: the stage writes its own DEBUG log and its console output
-    # (stderr) flows straight through, so progress is visible and $? is exact.
     AAT_LOG_FILE=$log AAT_LOG_STAGE=$name AAT_LOG_LEVEL=$CHILD_LEVEL "$@" || rc=$?
     if [[ $rc -eq 0 ]]; then
         say "$(printf '  %-12s ok (%ss)' "$name" "$((SECONDS - t0))")"
     else
-        # The traceback is already on screen above this line.
         say "$(printf '  %-12s FAILED rc=%d (%ss)  full log: %s' "$name" "$rc" "$((SECONDS - t0))" "$log")"
         FAILED+=("$name")
         return 1
@@ -175,8 +173,6 @@ run_one_model() {
     local MODEL=$1
     local SLUG=${MODEL//\//_}${TAG:+_$TAG}
 
-    # Injection layers are a fraction of depth, not fixed indices: 6,12,18 does not
-    # exist on a 12-layer model, and steer_recover rejects inject layers it cannot see.
     local probe_err
     probe_err=$(mktemp)
     local N_LAYERS
@@ -184,8 +180,6 @@ run_one_model() {
 from transformers import AutoConfig
 print(AutoConfig.from_pretrained('$MODEL').num_hidden_layers)" 2>"$probe_err" | tail -1)
     if ! [[ $N_LAYERS =~ ^[0-9]+$ ]]; then
-        # Surface the real cause: gated repos, typos and auth failures all used to
-        # collapse into one useless "could not read" line because stderr was discarded.
         echo "could not read num_hidden_layers for $MODEL -- skipping" >&2
         grep -E "OSError|GatedRepo|401|403|not a local folder|Repository Not Found|ConnectionError" \
             "$probe_err" | head -3 | sed 's/^/      /' >&2
@@ -199,8 +193,6 @@ print(AutoConfig.from_pretrained('$MODEL').num_hidden_layers)" 2>"$probe_err" | 
     local COMMON=(--model_name "$MODEL" --dtype "$DTYPE")
     [[ -n $DEVICE ]] && COMMON+=(--device "$DEVICE")
 
-    # Locals, but the helpers above read them: bash scopes dynamically, so say()
-    # and stage() see this model's LOG_DIR and FAILED rather than the last one's.
     local ACT_DIR=data/activations/$SLUG
     local RES=results/$SLUG
     local LOG_DIR=$RES/logs
@@ -215,7 +207,6 @@ print(AutoConfig.from_pretrained('$MODEL').num_hidden_layers)" 2>"$probe_err" | 
     say "logs      $LOG_DIR/"
     say ""
 
-    # Rebuild anything on disk that was built at a different dtype -- see artifact_dtype.
     local act_sentinel="$ACT_DIR/*.pt"
     local vocab_sentinel="$ACT_DIR/vocab/vocab_table.pt"
     local have on_disk
@@ -235,19 +226,17 @@ print(AutoConfig.from_pretrained('$MODEL').num_hidden_layers)" 2>"$probe_err" | 
         fi
     fi
 
-    # Prerequisites: everything downstream reads these, so a failure here ends this
-    # model -- but only this one, so the rest of the sweep still gets its shot.
     stage activations "$act_sentinel" \
         uv run src/save_activations.py "${COMMON[@]}" || { model_failed "$MODEL"; return 1; }
     stage vocab "$vocab_sentinel" \
         uv run src/vocab_activation_table.py "${COMMON[@]}" || { model_failed "$MODEL"; return 1; }
 
-    # Experiments are independent of each other; record failures and keep going.
     stage sipit "$RES/sipit/layers/sipit_layer_00.jsonl" \
         scripts/eval_sipit_layers.sh --act_dir "$ACT_DIR" --n_prompts "$SIPIT_PROMPTS" \
             --model_name "$MODEL" --dtype "$DTYPE" ${DEVICE:+--device "$DEVICE"}
     stage sentiment "$RES/sentiment/gaps.json" \
-        uv run src/sentiment_dir.py "${COMMON[@]}" --fractions "$FRACTIONS"
+        uv run src/behavior_eval.py "${COMMON[@]}" --behavior sentiment \
+            --fractions "$FRACTIONS" --no_target_gap
     stage audit "$RES/steer/audit.jsonl" \
         uv run src/steer_audit.py "${COMMON[@]}" --n_prompts "$AUDIT_PROMPTS"
     stage fractions "$RES/steer/fractions/*.jsonl" \
@@ -277,8 +266,6 @@ print(AutoConfig.from_pretrained('$MODEL').num_hidden_layers)" 2>"$probe_err" | 
     SUMMARY+=("$(printf '  %-34s ok -> %s/' "$MODEL" "$RES")")
 }
 
-# A prerequisite failure has no stage list worth printing -- it is always the one
-# that just failed, and its log path is already on screen.
 model_failed() {
     SUMMARY+=("$(printf '  %-34s FAILED: %s' "$1" "${FAILED[*]}")")
 }
@@ -294,8 +281,6 @@ for MODEL in "${MODELS[@]}"; do
     run_one_model "$MODEL" || rc=1
 done
 
-# One place to look after an unattended sweep, since each model narrates into its
-# own run.log and nothing else spans them.
 if [[ ${#MODELS[@]} -gt 1 ]]; then
     printf '\n===== %d models =====\n' "${#MODELS[@]}" >&2
     printf '%s\n' ${SUMMARY[@]+"${SUMMARY[@]}"} >&2

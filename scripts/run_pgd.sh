@@ -13,6 +13,12 @@ MODEL defaults to Qwen/Qwen2.5-0.5B-Instruct. Several models run one after anoth
 they share a GPU, so running them concurrently trades wall clock for OOM risk. A model
 whose prerequisites are missing is reported and skipped; the sweep continues.
 
+Everything pgd_attack.py takes is forwarded, including --behavior / --arm /
+--prompt_format; this wrapper's own defaults are the sentiment ones. For a refusal
+attack pass --layer explicitly: the gaps.json layer rule is (flip_rate, KL), which
+picks the last block on a refusal behavior, where nothing has actually been steered
+(see behavior_eval --gen_pick_by).
+
 Prerequisite: results/<slug>/sentiment/gaps.json, which is where the attack's layer
 comes from (highest flip_rate at --fraction). Produce it with
   scripts/run_model.sh MODEL --full
@@ -25,7 +31,10 @@ or point at another run's copy with --gaps.
   --layer N              skip the gaps.json lookup and inject here
   --constraints C        all,injection (default) -- see pgd_attack.py --help
   --arms A               caa,random,pgd (default)
-  --objective O          sentiment (default) | cw
+  --objective O          sentiment (default) | cw | target | refusal
+                         target is the jailbreak objective: mean teacher-forced
+                         log P(affirmative continuation), which needs --behavior
+                         jbb_refusal (or another behavior with per-item targets)
   --n_prompts N          0 = the whole test set (default), matching gaps.json
   --steps N              PGD steps per restart (default 200)
   --n_restarts N         random inits on top of the zero init (default 3)
@@ -92,12 +101,8 @@ while [[ $# -gt 0 ]]; do
             ;;
         --model_name)    MODELS+=("$2"); shift 2 ;;
         -h | --help)     usage; exit 0 ;;
-        # Anything else is pgd_attack.py's: --gaps, --layer, --constraints, --arms,
-        # --n_prompts, --steps, --n_restarts, --seed, --device, --fraction, ...
         -*)
             CHILD_ARGS+=("$1")
-            # Take the next token as this flag's value only if it is not itself a
-            # flag; a bare word otherwise belongs to MODEL, not to $1.
             if [[ $# -gt 1 && $2 != -* ]]; then
                 CHILD_ARGS+=("$2")
                 shift
@@ -113,14 +118,9 @@ if [[ -n $TAG && ! $TAG =~ ^[A-Za-z0-9._-]+$ ]]; then
     echo "--tag must be [A-Za-z0-9._-]+, got: $TAG" >&2
     exit 1
 fi
-# Read by paths.py, so the python stage lands in the same tagged tree run_model.sh
-# used. Compute dtype is pinned to float32 here, so an untagged run reads and writes
-# results/<slug>_fp32/ -- pass --tag to point at some other run's tree instead.
 export AAT_RUN_TAG=$TAG
 export AAT_DTYPE=float32
 
-# One budget per --budget_dtypes entry, resolved here rather than in the child so the
-# planned output paths can be printed (and skipped) before any weights are loaded.
 if [[ -z $BUDGETS ]]; then
     BUDGETS=$(uv run python -c "
 import sys; sys.path.insert(0, 'src')
@@ -163,9 +163,6 @@ for entry in "${planned[@]}"; do
         continue
     fi
     echo "======== $model budget $budget -> $out ========"
-    # No .partial dance here: pgd_attack appends each row as it lands and resumes from
-    # whatever is present, so an interrupted run is worth keeping rather than discarding.
-    # The sibling .json is what marks a run complete.
     if ! uv run src/pgd_attack.py \
         --model_name "$model" \
         --budget "$budget" \
