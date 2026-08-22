@@ -7,12 +7,14 @@ from pathlib import Path
 import torch
 from torch import Tensor
 
+import behaviors
+import prompt_format
 import sipit
-from sentiment_dir import _steer_hidden, build_steering_vectors, load_pairs
 from sipit import Top2
+from steering import _steer_hidden, build_steering_vectors
 from log import add_logging_args, get_logger
 from log import setup as log_setup
-from paths import experiment_dir, logs_dir
+from paths import logs_dir, steer_dir
 from utils import (
     DTYPES,
     add_model_args,
@@ -30,12 +32,10 @@ logger = get_logger(__name__)
 
 
 def steering_delta(direction: Tensor, scale: Tensor, fraction: float) -> Tensor:
-    """The vector make_add_vector_hook injects — fraction of the layer's mean state norm."""
     return fraction * scale * direction / direction.norm()
 
 
 def random_delta(hidden_size: int, scale: Tensor, fraction: float, seed: int) -> Tensor:
-    """Norm-matched control direction, so only orientation differs from the steering vector."""
     g = torch.Generator().manual_seed(seed)
     v = torch.randn(hidden_size, generator=g)
     return fraction * scale * v / v.norm()
@@ -51,20 +51,6 @@ def make_delta_hook(delta: Tensor):
 @torch.no_grad()
 def layer_states(prompt: str, layers: list[int], hook_layer: int = 0, hook_fn=None,
                  post_norm: bool = True) -> dict[int, Tensor]:
-    """Last-position hidden state at each of `layers`, from one forward pass.
-
-    Runs the real perturbed forward rather than adding delta to a clean state: at the
-    final block the model's own norm is applied after the hook, so the two differ there.
-
-    post_norm=False returns the raw block output at the last layer instead of the
-    model's post-norm state — what you want when comparing a block's output to
-    itself, since the norm is nonlinear and would break `steered - base == delta`.
-
-    States are captured straight off block L-1 rather than from out.hidden_states,
-    because a forward hook that rewrites a block's output is not reflected in that
-    block's own hidden_states slot — HF fills the slot before the rewrite propagates,
-    which would place an injection one layer late.
-    """
     model, tokenizer = require_model()
     blocks = get_decoder_layers()
     captured: dict[int, Tensor] = {}
@@ -77,7 +63,7 @@ def layer_states(prompt: str, layers: list[int], hook_layer: int = 0, hook_fn=No
         return capture
 
     handles = []
-    if hook_fn is not None:  # registered first, so `capture` sees the steered output
+    if hook_fn is not None:
         handles.append(blocks[hook_layer - 1].register_forward_hook(hook_fn))
     for layer in layers:
         handles.append(blocks[layer - 1].register_forward_hook(make_capture(layer)))
@@ -90,20 +76,16 @@ def layer_states(prompt: str, layers: list[int], hook_layer: int = 0, hook_fn=No
         for h in handles:
             h.remove()
 
-    # match sipit.candidate_states: the last layer is post-norm
     finish = apply_final_norm if post_norm else (lambda h, _L: h)
     return {L: finish(captured[L], L).float().cpu() for L in layers}
 
 
 def layer_state(prompt: str, layer: int, hook_fn=None, post_norm: bool = True) -> Tensor:
-    """Single-layer `layer_states`, hooking the same block it captures."""
     return layer_states(prompt, [layer], hook_layer=layer, hook_fn=hook_fn,
                         post_norm=post_norm)[layer]
 
 
 def prefix_cache(prompt: str):
-    """(prefix ids, true last-token id, KV cache for the prefix) — the setup every
-    vocab scan needs. The last token is what the scan tries to recover."""
     _, tokenizer = require_model()
     ids = tokenizer(prompt, return_tensors="pt")["input_ids"][0].tolist()
     if len(ids) < 2:
@@ -115,46 +97,35 @@ def prefix_cache(prompt: str):
 
 @torch.no_grad()
 def build_targets(prompt: str, steering: dict[int, tuple[Tensor, Tensor]], *,
-                  layers: list[int], fraction: float, seed: int):
-    """Clean / steered / random targets at every layer, plus the deltas injected.
-
-    The clean states all come from one forward pass; only the steered and random
-    ones need a hooked forward per layer, since each layer gets its own delta.
-    """
+                  layers: list[int], fractions: list[float], seed: int):
     model, _ = require_model()
     clean = layer_states(prompt, layers)
-    targets: dict[tuple[int, str], Tensor] = {}
-    deltas: dict[int, dict[str, Tensor]] = {}
+    targets: dict[tuple[int, str, float | None], Tensor] = {}
+    deltas: dict[tuple[int, float], dict[str, Tensor]] = {}
     for layer in layers:
+        targets[layer, "clean", None] = clean[layer]
         direction, scale = steering[layer]
-        d_steer = steering_delta(direction, scale, fraction)
-        d_rand = random_delta(model.config.hidden_size, scale, fraction, seed)
-        deltas[layer] = {"steer": d_steer, "rand": d_rand}
-        targets[layer, "clean"] = clean[layer]
-        targets[layer, "steer"] = layer_state(prompt, layer, make_delta_hook(d_steer))
-        targets[layer, "rand"] = layer_state(prompt, layer, make_delta_hook(d_rand))
+        for fraction in fractions:
+            d_steer = steering_delta(direction, scale, fraction)
+            d_rand = random_delta(model.config.hidden_size, scale, fraction, seed)
+            deltas[layer, fraction] = {"steer": d_steer, "rand": d_rand}
+            targets[layer, "steer", fraction] = layer_state(
+                prompt, layer, make_delta_hook(d_steer))
+            targets[layer, "rand", fraction] = layer_state(
+                prompt, layer, make_delta_hook(d_rand))
     return targets, deltas
 
 
 @torch.no_grad()
-def scan_vocab(cache, prefix_len: int, targets: dict[tuple[int, str], Tensor], chunk: int):
-    """One full-vocabulary pass; running top-2 distance for every (layer, kind) target.
-
-    Candidate states depend only on the pinned prefix, so a single forward with
-    output_hidden_states serves every layer and every target at once — the alternative
-    (sipit.candidate_states per layer) recomputes the same states once per depth.
-    """
+def scan_vocab(cache, prefix_len: int, targets: dict[tuple, Tensor], chunk: int):
     model, _ = require_model()
     device = next(model.parameters()).device
     vocab_size = int(model.config.vocab_size)
 
-    # Grouped once: the layer -> targets mapping is loop-invariant, and rescanning
-    # every target per layer per chunk is O(layers x targets) work for nothing.
-    by_layer: dict[int, list[tuple[tuple[int, str], Tensor]]] = {}
+    by_layer: dict[int, list[tuple[tuple, Tensor]]] = {}
     for key, target in targets.items():
         by_layer.setdefault(key[0], []).append((key, target))
 
-    # Same KV budget sipit uses: expanding the prefix cache per candidate is what blows up.
     cap = sipit.batch_cap(prefix_len, chunk)
     tracked = {key: Top2() for key in targets}
 
@@ -184,55 +155,57 @@ def audit_prompt(
     steering: dict[int, tuple[Tensor, Tensor]],
     *,
     layers: list[int],
-    fraction: float,
+    fractions: list[float],
     rel_tol: float,
     chunk: int,
     seed: int,
-) -> list[dict]:
-    """Clean/steered/random targets at every layer, scored against one shared vocab scan."""
+) -> dict[float, list[dict]]:
     prefix, true_id, cache = prefix_cache(prompt)
-    targets, deltas = build_targets(prompt, steering, layers=layers, fraction=fraction, seed=seed)
+    targets, deltas = build_targets(prompt, steering, layers=layers,
+                                    fractions=fractions, seed=seed)
     tracked = scan_vocab(cache, len(prefix), targets, chunk)
 
-    rows = []
+    rows: dict[float, list[dict]] = {f: [] for f in fractions}
     for layer in layers:
-        clean, steer, rand = (tracked[layer, k] for k in ("clean", "steer", "rand"))
-        h_norm = float(targets[layer, "clean"].norm())
+        clean = tracked[layer, "clean", None]
+        h_norm = float(targets[layer, "clean", None].norm())
         gap = clean.gap
-        rows.append(
-            {
-                "prompt": prompt,
-                "layer": layer,
-                "h_norm": h_norm,
-                "true_token": true_id,
-                "rel_gap": gap / h_norm,  # the curve from plot_sipit_layers, on this prompt
-                "clean": {
-                    "residual": clean.best,
-                    "gap": gap,
-                    "token": clean.best_id,
-                    "recovered": clean.best_id == true_id,
-                },
-                **{
-                    kind: {
-                        "delta_norm": float(deltas[layer][kind].norm()),
-                        "residual": t.best,
-                        "gap": t.gap,
-                        "token": t.best_id,
-                        "recovered": t.best_id == true_id,
-                        "rel_residual": t.best / h_norm,
-                        # Thm 3.2 guarantees exact recovery below 0.5.
-                        "margin_spent": t.best / gap if gap > 0 else float("inf"),
-                        "detected": t.best > rel_tol * h_norm,
-                    }
-                    for kind, t in (("steer", steer), ("rand", rand))
-                },
-            }
-        )
+        for fraction in fractions:
+            steer = tracked[layer, "steer", fraction]
+            rand = tracked[layer, "rand", fraction]
+            rows[fraction].append(
+                {
+                    "prompt": prompt,
+                    "layer": layer,
+                    "fraction": fraction,
+                    "h_norm": h_norm,
+                    "true_token": true_id,
+                    "rel_gap": gap / h_norm,
+                    "clean": {
+                        "residual": clean.best,
+                        "gap": gap,
+                        "token": clean.best_id,
+                        "recovered": clean.best_id == true_id,
+                    },
+                    **{
+                        kind: {
+                            "delta_norm": float(deltas[layer, fraction][kind].norm()),
+                            "residual": t.best,
+                            "gap": t.gap,
+                            "token": t.best_id,
+                            "recovered": t.best_id == true_id,
+                            "rel_residual": t.best / h_norm,
+                            "margin_spent": t.best / gap if gap > 0 else float("inf"),
+                            "detected": t.best > rel_tol * h_norm,
+                        }
+                        for kind, t in (("steer", steer), ("rand", rand))
+                    },
+                }
+            )
     return rows
 
 
 def summarize(rows: list[dict], layers: list[int]) -> None:
-    """Per-layer means across prompts — the paired version of the two-curve overlay."""
     logger.info(
         "%5s %9s %10s %10s %9s %6s %5s   | random: %9s %6s %5s",
         "layer", "||h||", "gap/||h||", "res/||h||", "res/gap", "recov", "det",
@@ -267,14 +240,38 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
     add_model_args(parser)
-    parser.add_argument("--train_path", type=str, default="data/sentiment_opposites_train.json")
     parser.add_argument(
-        "--test_path",
+        "--behavior",
         type=str,
-        default="data/sentiment_opposites_test.json",
-        help="prompts to audit; the negative half of each pair is used, as in sentiment_dir",
+        default="sentiment",
+        help=f"one of {', '.join(behaviors.list_behaviors())}, or a path. Supplies both "
+             f"the contrast pairs the steering vector is fitted on and the held-out "
+             f"prompts to audit, so detection and efficacy are measured on the same "
+             f"vector and the same text",
     )
-    parser.add_argument("--fraction", type=float, default=0.1)
+    parser.add_argument(
+        "--arm",
+        type=str,
+        default=None,
+        help="test arm to audit (default: the dataset's default_arm)",
+    )
+    parser.add_argument(
+        "--prompt_format",
+        type=str,
+        default="auto",
+        choices=list(prompt_format.FORMATS),
+        help="must match the behavior_eval run this audit is read against: the "
+             "detection threshold is calibrated on the same states the efficacy "
+             "numbers came from",
+    )
+    parser.add_argument(
+        "--fractions",
+        type=str,
+        default="0.1",
+        help="comma-separated steering strengths. All of them ride ONE vocabulary scan, "
+             "so a sweep costs barely more than a single fraction; several fractions "
+             "write one file each into --out_dir instead of --out",
+    )
     parser.add_argument(
         "--n_prompts",
         type=int,
@@ -299,13 +296,31 @@ def main():
         "--out",
         type=Path,
         default=None,
-        help="default: results/<slug>/steer/audit.jsonl",
+        help="default: results/<slug>/steer/audit.jsonl (single fraction only)",
+    )
+    parser.add_argument(
+        "--out_dir",
+        type=Path,
+        default=None,
+        help="where steer_audit_f<fraction>.jsonl go when several fractions are given "
+             "(default: results/<slug>/steer/fractions)",
     )
     add_logging_args(parser)
     args = parser.parse_args()
     log_setup(args, default_log=logs_dir(args.model_name) / "audit.log")
+
+    fractions = [float(f) for f in args.fractions.split(",") if f.strip()]
+    if not fractions:
+        raise SystemExit("--fractions: give at least one value")
+    if len(fractions) > 1 and args.out is not None:
+        raise SystemExit("--out takes a single file; several fractions need --out_dir")
+    behavior = behaviors.load_behavior(args.behavior)
+    arm = args.arm or behavior.default_arm
+    base_dir = steer_dir(args.model_name, behavior.name)
     if args.out is None:
-        args.out = experiment_dir(args.model_name, "steer") / "audit.jsonl"
+        args.out = base_dir / "audit.jsonl"
+    if args.out_dir is None:
+        args.out_dir = base_dir / "fractions"
 
     rel_tol: float = (
         rel_tol_for(DTYPES[args.dtype]) if args.rel_tol is None else float(args.rel_tol)
@@ -313,40 +328,55 @@ def main():
     model, _ = load_model(args.model_name, dtype=DTYPES[args.dtype], device=args.device)
     logger.info("model on %s, %s", model_device(), args.dtype)
 
-    # Runs on --device; build_steering_vectors hands back CPU fp32 either way, which
-    # is what layer_states() returns and what every delta here is compared against.
-    steering = build_steering_vectors(load_pairs(args.train_path))
+    fmt = prompt_format.resolve_format(args.prompt_format, behavior)
+    steering = build_steering_vectors(prompt_format.render_contrast_pairs(behavior, fmt))
 
     layers = (
         [int(s) for s in args.layers.split(",")]
         if args.layers
         else list(range(1, model.config.num_hidden_layers + 1))
     )
-    prompts = [neg for _, neg in load_pairs(args.test_path)][: args.n_prompts]
-    logger.info("%d prompts x %d layers, fraction=%g", len(prompts), len(layers), args.fraction)
+    prompts = prompt_format.render_prompts(
+        behavior, behavior.items(arm, args.n_prompts), fmt)
+    logger.info("behavior %s, arm %s, prompt_format %s", behavior.name, arm, fmt)
+    single = len(fractions) == 1
+    paths = ({fractions[0]: args.out} if single
+             else {f: args.out_dir / f"steer_audit_f{f:g}.jsonl" for f in fractions})
+    for path in paths.values():
+        path.parent.mkdir(parents=True, exist_ok=True)
+    logger.info("%d prompts x %d layers x %d fraction(s) %s, one vocab scan each",
+                len(prompts), len(layers), len(fractions),
+                ",".join(f"{f:g}" for f in fractions))
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    rows: list[dict] = []
-    with args.out.open("w") as f:
+    rows: dict[float, list[dict]] = {f: [] for f in fractions}
+    handles = {f: path.open("w") for f, path in paths.items()}
+    try:
         for i, prompt in enumerate(prompts, start=1):
             start = time.time()
             got = audit_prompt(
                 prompt,
                 steering,
                 layers=layers,
-                fraction=args.fraction,
+                fractions=fractions,
                 rel_tol=rel_tol,
                 chunk=args.chunk,
                 seed=args.seed,
             )
-            for row in got:
-                f.write(json.dumps(row) + "\n")
-            f.flush()
-            rows.extend(got)
+            for fraction, fraction_rows in got.items():
+                for row in fraction_rows:
+                    handles[fraction].write(json.dumps(row) + "\n")
+                handles[fraction].flush()
+                rows[fraction].extend(fraction_rows)
             logger.info("  [%d/%d] %r in %.1fs", i, len(prompts), prompt, time.time() - start)
+    finally:
+        for handle in handles.values():
+            handle.close()
 
-    summarize(rows, layers)
-    logger.info("wrote %s", args.out)
+    for fraction in fractions:
+        if not single:
+            logger.info("---- fraction %g ----", fraction)
+        summarize(rows[fraction], layers)
+        logger.info("wrote %s", paths[fraction])
 
 
 if __name__ == "__main__":
