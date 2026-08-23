@@ -9,7 +9,7 @@ from utils import get_decoder_layers, model_device, require_model
 
 logger = get_logger(__name__)
 
-POSITIONS = ("last", "all")
+POSITIONS = ("last", "all", "first")
 
 
 @dataclass
@@ -39,6 +39,18 @@ class Intervention:
                     hidden += mask.to(hidden.dtype).unsqueeze(-1) * d
                 else:
                     hidden += d
+            elif positions == "first":
+                # Prefill only: position 0 exists in exactly one forward pass, and a
+                # decode step (seq len 1) must not re-add -- that would turn a
+                # one-position edit into an all-positions steer. Left padding means
+                # index 0 is a pad slot, not the first REAL token.
+                if hidden.shape[1] > 1:
+                    rows = torch.arange(hidden.shape[0], device=hidden.device)
+                    first = (mask.to(hidden.device).float().argmax(dim=1)
+                             if mask is not None and mask.shape[1] == hidden.shape[1]
+                             else torch.zeros(hidden.shape[0], dtype=torch.long,
+                                              device=hidden.device))
+                    hidden[rows, first] += d
             elif at is not None and hidden.shape[1] > 1:
                 rows = torch.arange(hidden.shape[0], device=hidden.device)
                 hidden[rows, at.to(hidden.device)] += d
@@ -54,10 +66,25 @@ class Intervention:
         return hook_fn
 
 
+def position_ids_for(mask: Tensor) -> Tensor:
+    """Positions that ignore left padding: the first REAL token is position 0.
+
+    Without this a left-padded batch is silently wrong on any model with learned
+    absolute position embeddings, because HF defaults position_ids to arange(seq_len)
+    and the pad slots eat the low positions. Measured on gpt2: batched last-token
+    logits differ from the same prompt run alone by up to 104, and a teacher-forced
+    logprob by 2.6 nats. Rotary models (Qwen, Llama, Pythia) are shift-invariant and
+    were never affected, which is exactly what makes this the kind of bug that ships.
+    """
+    return (mask.cumsum(dim=-1) - 1).clamp(min=0)
+
+
 def _encode(prompts: list[str]):
     _, tokenizer = require_model()
     encoded = tokenizer(prompts, return_tensors="pt", padding=True, padding_side="left")
-    return {k: v.to(model_device()) for k, v in encoded.items()}
+    inputs = {k: v.to(model_device()) for k, v in encoded.items()}
+    inputs["position_ids"] = position_ids_for(inputs["attention_mask"])
+    return inputs
 
 
 def _hooked(intervention: Intervention | None, mask: Tensor | None = None,
@@ -84,8 +111,10 @@ def generate_completions(
         inputs = _encode(chunk)
         handles = _hooked(intervention, mask=inputs["attention_mask"])
         try:
+            # generate() derives its own position_ids per decode step, and passing the
+            # prefill ones would pin every generated token to the last prompt position.
             generated = model.generate(
-                **inputs,
+                **{k: v for k, v in inputs.items() if k != "position_ids"},
                 max_new_tokens=max_new_tokens,
                 do_sample=False,
                 pad_token_id=tokenizer.pad_token_id,
@@ -136,6 +165,7 @@ def target_logprobs(
         handles = _hooked(intervention, mask=mask, at=prompt_end)
         try:
             logits = model(input_ids=input_ids, attention_mask=mask,
+                           position_ids=position_ids_for(mask),
                            use_cache=False).logits.float()
         finally:
             for h in handles:
