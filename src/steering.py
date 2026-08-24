@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import numpy as np
@@ -6,6 +7,28 @@ from torch import Tensor
 
 import utils
 from utils import get_decoder_layers, get_token_activations, model_device, require_model
+
+
+def control_seed(seed: int, layer: int, fraction: float, replicate: int = 0) -> int:
+    """Seed for the random control at one grid cell.
+
+    One direction reused across every (layer, fraction) makes the whole random arm a
+    single draw: the control curve is one sample of the noise, not an estimate of it,
+    and nothing downstream can tell a real effect from that one draw being unlucky.
+    Deriving the seed per cell makes the cells independent; `replicate` adds draws
+    within a cell, which is where the spread comes from.
+
+    behavior_eval and steer_audit must agree here or the join pairs a generation under
+    one random direction with a detection under another.
+    """
+    key = f"{seed}|{layer}|{fraction!r}|{replicate}".encode()
+    return int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "big") % (2**31 - 1)
+
+
+def random_direction(hidden_size: int, seed: int) -> Tensor:
+    g = torch.Generator().manual_seed(seed)
+    v = torch.randn(hidden_size, generator=g)
+    return v / v.norm()
 
 
 def load_pairs(path):
