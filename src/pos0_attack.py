@@ -9,6 +9,7 @@ import behaviors
 import prompt_format
 import scoring
 import sipit
+import sipit_trajectory
 from generate import Intervention, generate_completions, target_logprobs
 from log import add_logging_args, get_logger
 from log import setup as log_setup
@@ -27,7 +28,7 @@ from utils import (
 
 logger = get_logger(__name__)
 
-ARMS = ("hop", "hop_partial", "pgd0", "hop_pgd", "random0", "caa0")
+ARMS = ("none", "hop", "hop_partial", "pgd0", "hop_pgd", "random0", "caa0")
 
 DEFAULT_ALPHAS = (0.6, 0.75, 0.9)
 
@@ -142,12 +143,14 @@ def pgd_offset(clean: dict, layer: int, *, center: Tensor, radius: Tensor,
 def build_arm(arm: str, *, clean: dict, layer: int, vocab_layer: Tensor,
               plans: list[dict], budget_abs: Tensor, caa: Tensor | None,
               alpha: float, objective: str, word_pos, word_neg, steps: int,
-              n_restarts: int, seeds: list[int]) -> Tensor:
+              n_restarts: int, seeds: list[int], caa_sign: float = 1.0) -> Tensor:
     device = model_device()
     h0 = clean["states"][layer]
     hidden = h0.shape[-1]
     hop = torch.stack([vocab_layer[p["hop_token"]] for p in plans]).to(device) - h0
 
+    if arm == "none":
+        return torch.zeros_like(h0)
     if arm == "hop":
         return hop
     if arm == "hop_partial":
@@ -157,7 +160,7 @@ def build_arm(arm: str, *, clean: dict, layer: int, vocab_layer: Tensor,
     if arm == "caa0":
         if caa is None:
             raise SystemExit("arm caa0 needs a steering direction; it was not built")
-        unit = (caa / caa.norm()).to(device).unsqueeze(0).expand(clean["batch"], -1)
+        unit = (caa_sign * caa / caa.norm()).to(device).unsqueeze(0).expand(clean["batch"], -1)
         return unit * budget_abs.unsqueeze(-1)
     if arm == "pgd0":
         return pgd_offset(clean, layer, center=torch.zeros_like(h0),
@@ -249,7 +252,9 @@ def summarize(rows: list[dict]) -> list[dict]:
         }
         for field in ("d_target_logprob", "max_rel_dev_read", "behavior_score",
                       "behavior_hit", "jailbroken_substring", "hop_edit_divergence",
-                      "target_gap_steered"):
+                      "target_gap_steered", "sipit_exact", "sipit_token0_correct",
+                      "sipit_token0_matched", "sipit_silent_corruption",
+                      "sipit_first_fail", "sipit_first_wrong", "sipit_n_wrong"):
             if any(r.get(field) is not None for r in at):
                 entry[f"{field}_mean"] = mean(field)
         out.append(entry)
@@ -291,6 +296,12 @@ def main():
     parser.add_argument("--arm", type=str, default=None,
                         help="test arm (default: the dataset's default_arm)")
     parser.add_argument("--n_prompts", type=int, default=0, help="0 = the whole arm")
+    parser.add_argument("--prompts_file", type=Path, default=None,
+                        help="JSON {'prompts':[{'id','text','category'}]} to use instead "
+                             "of the behavior's arm. Every behavior here has a fixed "
+                             "first token, so token 0 never varies; the trajectory bank "
+                             "is how the hop gets tested against a real spread of them. "
+                             "Behavioural columns are meaningless with this")
     parser.add_argument("--prompt_format", type=str, default="auto",
                         choices=list(prompt_format.FORMATS))
     parser.add_argument("--layers", type=str, default="",
@@ -314,12 +325,20 @@ def main():
                              "leftover (1-alpha)*gap stays as residual")
     parser.add_argument("--rel_tol", type=float, default=None,
                         help="detection threshold, both detectors (default: per --dtype)")
+    parser.add_argument("--budget_frac", type=float, default=0.85,
+                        help="arms are built at this fraction of rel_tol. At 1.0 the "
+                             "norm-capped arms land exactly ON the threshold and their "
+                             "detected/not split is decided by float noise")
     parser.add_argument("--objective", type=str, default="sentiment",
                         choices=list(OBJECTIVES),
                         help="what the pgd0 / hop_pgd arms maximize, read at the LAST "
                              "prompt token")
     parser.add_argument("--target_side", type=str, default="neg", choices=["pos", "neg"],
                         help="which target the 'target' objective drives toward")
+    parser.add_argument("--caa_sign", type=float, default=1.0,
+                        help="sign of the caa0 arm. The direction points TOWARD the "
+                             "positive behavior, so -1 is the jailbreak direction for "
+                             "jbb_refusal")
     parser.add_argument("--steps", type=int, default=25)
     parser.add_argument("--n_restarts", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
@@ -335,6 +354,16 @@ def main():
                              "measure how far each hop sits from the corresponding "
                              "token-0 edit (default on; one extra forward pass per arm)")
     parser.add_argument("--no_verify_hop", dest="verify_hop", action="store_false")
+    parser.add_argument("--sipit_check", action="store_true",
+                        help="invert the attacked trajectory left to right, with no "
+                             "clean prefix. Reports where the sweep first FAILS against "
+                             "where it first goes WRONG; the two differing is silent "
+                             "corruption. Costs a vocab scan per position")
+    parser.add_argument("--sipit_prompts", type=int, default=2,
+                        help="prompts per (layer, arm) to invert, for --sipit_check")
+    parser.add_argument("--sipit_stop_on_fail", action="store_true",
+                        help="halt the sweep at the first unmatched position instead of "
+                             "running on to show the cascade")
     parser.add_argument("--generate", action="store_true",
                         help="also decode and score, for the behavioural half")
     parser.add_argument("--max_new_tokens", type=int, default=256)
@@ -373,7 +402,16 @@ def main():
             f"script's table-lookup shortcut would silently report the wrong residual.")
 
     fmt = prompt_format.resolve_format(args.prompt_format, behavior)
-    items = behavior.items(arm_name, args.n_prompts)
+    if args.prompts_file:
+        bank = json.loads(args.prompts_file.read_text())["prompts"]
+        if args.n_prompts:
+            bank = bank[:args.n_prompts]
+        items = [behaviors.Item(index=p.get("index", i),
+                                question=p.get("question") or p["text"],
+                                target=p.get("target"), category=p.get("category"))
+                 for i, p in enumerate(bank)]
+    else:
+        items = behavior.items(arm_name, args.n_prompts)
     prompts = prompt_format.render_prompts(behavior, items, fmt)
     logger.info("behavior %s, arm %s: %d prompts, format %s, layers %s",
                 behavior.name, arm_name, len(prompts), fmt, layers)
@@ -442,7 +480,7 @@ def main():
                 clean = clean_reference(chunk, layer, chunk_targets, position="first")
                 h0 = clean["states"][layer]
                 true_ids = clean["inputs"]["input_ids"][:, 0].tolist()
-                budget_abs = rel_tol * clean["h_norm"]
+                budget_abs = args.budget_frac * rel_tol * clean["h_norm"]
 
                 for k in hop_ranks:
                     plans = hop_plan(h0, vocab_layer, true_ids, k=k, chunk=args.chunk)
@@ -453,7 +491,8 @@ def main():
                                 plans=plans, budget_abs=budget_abs, caa=caa,
                                 alpha=alpha, objective=args.objective,
                                 word_pos=word_pos, word_neg=word_neg, steps=args.steps,
-                                n_restarts=args.n_restarts, seeds=seeds)
+                                n_restarts=args.n_restarts, seeds=seeds,
+                                caa_sign=args.caa_sign)
 
                             records = evaluate_deltas(layer, delta, clean=clean,
                                                       word_pos=word_pos,
@@ -493,8 +532,10 @@ def main():
                                     "alpha": alpha if arm == "hop_partial" else None,
                                     "hop_rank": k,
                                     "rel_tol": rel_tol,
+                                    "budget_frac": args.budget_frac,
                                     "index": chunk_items[b].index,
                                     "question": chunk_items[b].question,
+                                    "category": chunk_items[b].category,
                                     "budget_abs": float(budget_abs[b]),
                                     "h0_norm": float(clean["h_norm"][b]),
                                     **{f"plan_{key}": val
@@ -524,6 +565,25 @@ def main():
                                     layer, delta, batch_size=len(chunk))
                                 for b, g in enumerate(gaps):
                                     rows[-len(records) + b]["target_gap_steered"] = g
+
+                            if args.sipit_check:
+                                for b in range(min(len(records), args.sipit_prompts)):
+                                    n_real = int(
+                                        clean["inputs"]["attention_mask"][b].sum())
+                                    ids = clean["inputs"]["input_ids"][b][:n_real]
+                                    traj = sipit_trajectory.capture(
+                                        ids, layer,
+                                        Intervention(layer, delta[b:b + 1], "first"))
+                                    got = sipit_trajectory.invert(
+                                        traj, layer, vocab_layer, ids.tolist(),
+                                        rel_tol=rel_tol,
+                                        stop_on_fail=args.sipit_stop_on_fail)
+                                    row = rows[-len(records) + b]
+                                    for key, val in got.items():
+                                        if key != "steps":
+                                            row[f"sipit_{key}"] = val
+                                    row["sipit_recovered_text"] = tokenizer.decode(
+                                        got["recovered_ids"])
 
                             if args.generate:
                                 texts = generate_with_deltas(
@@ -567,6 +627,20 @@ def main():
     summary = summarize(rows)
     log_table(summary)
 
+    inverted = [r for r in rows if "sipit_silent_corruption" in r]
+    if inverted:
+        silent = [r for r in inverted if r["sipit_silent_corruption"]]
+        logger.info("")
+        logger.info("trajectory inversion: %d/%d runs corrupted SILENTLY (wrong token "
+                    "recovered before any alarm)", len(silent), len(inverted))
+        for r in silent[:5]:
+            logger.info("  L%-3d %-12s first wrong at %s, first alarm at %s -> "
+                        "localization points %s positions late",
+                        r["layer"], r["arm"], r["sipit_first_wrong"],
+                        r["sipit_first_fail"],
+                        "?" if r["sipit_first_fail"] is None
+                        else r["sipit_first_fail"] - r["sipit_first_wrong"])
+
     diverged = [r["hop_edit_divergence"] for r in rows if "hop_edit_divergence" in r]
     if diverged:
         logger.info("hop vs editing token 0: max |dlogit| %.3g (mean %.3g). Large means "
@@ -586,6 +660,7 @@ def main():
         "hop_ranks": hop_ranks,
         "alphas": alphas,
         "rel_tol": rel_tol,
+        "budget_frac": args.budget_frac,
         "objective": args.objective,
         "steps": args.steps,
         "n_restarts": args.n_restarts,
