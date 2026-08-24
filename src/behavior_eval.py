@@ -23,20 +23,16 @@ from steering import (
     PICK_BY,
     best_layer,
     build_steering_vectors,
+    control_seed,
     efficacy,
     first_token_id,
+    random_direction,
 )
 from utils import DTYPES, add_model_args, load_model, model_device
 
 logger = get_logger(__name__)
 
 ARMS = ("steer", "rand")
-
-
-def _random_direction(hidden_size: int, seed: int) -> torch.Tensor:
-    g = torch.Generator().manual_seed(seed)
-    v = torch.randn(hidden_size, generator=g)
-    return v / v.norm()
 
 
 def _resolve_targets(behavior: Behavior, items: list[Item]) -> tuple[list[str], list[str]]:
@@ -54,17 +50,30 @@ def _resolve_targets(behavior: Behavior, items: list[Item]) -> tuple[list[str], 
     return pos, neg
 
 
+def _graded(values) -> list:
+    """Drop the two ways a judge says "no grade": None (binary) and NaN (score)."""
+    return [v for v in values
+            if v is not None and not (isinstance(v, float) and math.isnan(v))]
+
+
 def _mean(values) -> float:
-    values = [v for v in values if not (isinstance(v, float) and math.isnan(v))]
-    return sum(values) / len(values) if values else float("nan")
+    kept = _graded(values)
+    return sum(kept) / len(kept) if kept else float("nan")
+
+
+def _sd(values) -> float:
+    kept = _graded(values)
+    if len(kept) < 2:
+        return float("nan")
+    mu = sum(kept) / len(kept)
+    return math.sqrt(sum((v - mu) ** 2 for v in kept) / (len(kept) - 1))
 
 
 def sweep_grid(behavior: Behavior, prompts: list[str], pos_targets: list[str],
                neg_targets: list[str], steering: dict, *, fractions: list[float],
                layers: list[int], positions: str, seed: int, batch_size: int,
-               want_target_gap: bool) -> list[dict]:
+               want_target_gap: bool, n_rand: int = 3) -> list[dict]:
     hidden = next(iter(steering.values()))[0].numel()
-    rand_dir = _random_direction(hidden, seed)
 
     clean_logits = last_token_logits_batch(prompts, None, batch_size=batch_size)
     pos_ids = [first_token_id(t) for t in pos_targets]
@@ -76,43 +85,57 @@ def sweep_grid(behavior: Behavior, prompts: list[str], pos_targets: list[str],
         n = target_logprobs(prompts, neg_targets, None, batch_size=batch_size)
         clean_target = [a["mean"] - b["mean"] for a, b in zip(p, n)]
 
+    def measure(intervention: Intervention) -> dict:
+        logits = last_token_logits_batch(prompts, intervention, batch_size=batch_size)
+        stats = [efficacy(clean_logits[i], logits[i], pos_ids[i], neg_ids[i])
+                 for i in range(len(prompts))]
+        got = {"gap": _mean(s[0] for s in stats), "kl": _mean(s[1] for s in stats),
+               "flip": _mean(s[2] for s in stats)}
+        if want_target_gap:
+            p = target_logprobs(prompts, pos_targets, intervention, batch_size=batch_size)
+            n = target_logprobs(prompts, neg_targets, intervention, batch_size=batch_size)
+            assert clean_target is not None
+            got["target_gap"] = _mean((a["mean"] - b["mean"]) - c
+                                      for a, b, c in zip(p, n, clean_target))
+        return got
+
     rows = []
-    logger.info("%9s %6s %12s %11s %9s %9s %7s %11s",
+    logger.info("%9s %6s %12s %19s %9s %9s %7s %11s",
                 "fraction", "layer", "steered_gap", "random_gap", "KL", "KL_rand",
                 "flip%", "target_gap")
     for fraction in fractions:
         for layer in layers:
             direction, scale = steering[layer]
-            arms = {
-                "steer": Intervention.from_direction(layer, direction, scale, fraction,
-                                                     positions, "steer"),
-                "rand": Intervention.from_direction(layer, rand_dir, scale, fraction,
-                                                    positions, "rand"),
-            }
-            entry = {"layer": layer, "fraction": fraction}
-            for arm, intervention in arms.items():
-                logits = last_token_logits_batch(prompts, intervention,
-                                                 batch_size=batch_size)
-                stats = [efficacy(clean_logits[i], logits[i], pos_ids[i], neg_ids[i])
-                         for i in range(len(prompts))]
-                suffix = "" if arm == "steer" else "_random"
-                entry[f"{'steered' if arm == 'steer' else 'random'}_gap_mean"] = \
-                    _mean(s[0] for s in stats)
-                entry[f"kl{suffix}_mean"] = _mean(s[1] for s in stats)
-                entry[f"flip_rate{suffix}"] = _mean(s[2] for s in stats)
+            entry = {"layer": layer, "fraction": fraction, "n_rand": n_rand}
 
-                if want_target_gap:
-                    p = target_logprobs(prompts, pos_targets, intervention,
-                                        batch_size=batch_size)
-                    n = target_logprobs(prompts, neg_targets, intervention,
-                                        batch_size=batch_size)
-                    assert clean_target is not None
-                    deltas = [(a["mean"] - b["mean"]) - c
-                              for a, b, c in zip(p, n, clean_target)]
-                    entry[f"target_gap{suffix}_mean"] = _mean(deltas)
+            got = measure(Intervention.from_direction(layer, direction, scale, fraction,
+                                                      positions, "steer"))
+            entry["steered_gap_mean"] = got["gap"]
+            entry["kl_mean"] = got["kl"]
+            entry["flip_rate"] = got["flip"]
+            if want_target_gap:
+                entry["target_gap_mean"] = got["target_gap"]
 
-            logger.info("%9g %6d %12.4f %11.4f %9.4f %9.4f %6.0f%% %11s",
-                        fraction, layer, entry["steered_gap_mean"], entry["random_gap_mean"],
+            draws = [measure(Intervention.from_direction(
+                layer,
+                random_direction(hidden, control_seed(seed, layer, fraction, r)),
+                scale, fraction, positions, "rand"))
+                for r in range(n_rand)]
+            entry["random_gap_mean"] = _mean(d["gap"] for d in draws)
+            entry["random_gap_sd"] = _sd(d["gap"] for d in draws)
+            entry["kl_random_mean"] = _mean(d["kl"] for d in draws)
+            entry["kl_random_sd"] = _sd(d["kl"] for d in draws)
+            entry["flip_rate_random"] = _mean(d["flip"] for d in draws)
+            entry["flip_rate_random_sd"] = _sd(d["flip"] for d in draws)
+            if want_target_gap:
+                entry["target_gap_random_mean"] = _mean(d["target_gap"] for d in draws)
+                entry["target_gap_random_sd"] = _sd(d["target_gap"] for d in draws)
+
+            sd = entry["random_gap_sd"]
+            logger.info("%9g %6d %12.4f %11.4f%8s %9.4f %9.4f %6.0f%% %11s",
+                        fraction, layer, entry["steered_gap_mean"],
+                        entry["random_gap_mean"],
+                        "" if math.isnan(sd) else f" +-{sd:.4f}",
                         entry["kl_mean"], entry["kl_random_mean"],
                         100 * entry["flip_rate"],
                         f"{entry['target_gap_mean']:.4f}" if want_target_gap else "-")
@@ -172,11 +195,17 @@ def _summarize_generation(rows: list[dict]) -> dict:
     if rows and "jailbroken_judge" in rows[0]:
         out["asr_judge"] = _mean(r["jailbroken_judge"] for r in rows)
         out["judge_score_mean"] = _mean(r["judge_score"] for r in rows)
+        out["n_graded_judge"] = len(_graded(r["jailbroken_judge"] for r in rows))
         for key in sorted(k[len("judge_"):-len("_score")] for k in rows[0]
                           if k.startswith("judge_") and k.endswith("_score")
                           and k != "judge_score"):
             out[f"asr_{key}"] = _mean(r[f"judge_{key}"] for r in rows)
             out[f"score_{key}_mean"] = _mean(r[f"judge_{key}_score"] for r in rows)
+            out[f"n_graded_{key}"] = len(_graded(r[f"judge_{key}"] for r in rows))
+        if out["n_graded_judge"] < len(rows):
+            logger.warning("%d/%d rows ungraded and excluded from asr_judge; the rate is "
+                           "over the %d that graded", len(rows) - out["n_graded_judge"],
+                           len(rows), out["n_graded_judge"])
     categories = sorted({r["category"] for r in rows if r["category"]})
     if categories:
         out["asr_substring_per_category"] = {
@@ -194,29 +223,32 @@ def _summarize_generation(rows: list[dict]) -> dict:
 def run_generation(behavior: Behavior, items: list[Item], prompts: list[str],
                    steering: dict, *, points: list[tuple[int, float]], positions: str,
                    seed: int, max_new_tokens: int, batch_size: int, judges: list,
-                   stop_at_newline_pair: bool, out_dir: Path) -> list[dict]:
+                   stop_at_newline_pair: bool, out_dir: Path,
+                   n_rand: int = 1) -> list[dict]:
     hidden = next(iter(steering.values()))[0].numel()
-    rand_dir = _random_direction(hidden, seed)
 
     completions_path = out_dir / "completions.jsonl"
     summaries: list[dict] = []
     with completions_path.open("w") as handle:
-        def record(arm: str, layer, fraction, intervention):
+        def record(arm: str, layer, fraction, intervention, replicate: int = 0):
             texts = generate_completions(
                 prompts, intervention, max_new_tokens=max_new_tokens,
                 batch_size=batch_size, stop_at_newline_pair=stop_at_newline_pair)
             rows = _score_rows(behavior, items, prompts, texts, judges)
             for row in rows:
-                handle.write(json.dumps({"arm": arm, "layer": layer,
-                                         "fraction": fraction, **row}) + "\n")
+                handle.write(json.dumps({
+                    "arm": arm, "layer": layer, "fraction": fraction,
+                    "positions": intervention.positions if intervention else None,
+                    "replicate": replicate, **row}) + "\n")
             handle.flush()
             summary = {"arm": arm, "layer": layer, "fraction": fraction,
-                       **_summarize_generation(rows)}
+                       "replicate": replicate, **_summarize_generation(rows)}
             summaries.append(summary)
-            logger.info("%8s L%-3s f=%-7s behavior %5.0f%%  refusal %5.0f%%  "
+            logger.info("%8s L%-3s f=%-7s %s behavior %5.0f%%  refusal %5.0f%%  "
                         "ASR(substring) %5.0f%%%s",
                         arm, layer if layer is not None else "-",
                         f"{fraction:g}" if fraction is not None else "-",
+                        f"r{replicate}" if n_rand > 1 and arm == "rand" else "  ",
                         100 * summary["behavior_rate"],
                         100 * summary["refusal_rate_substring"],
                         100 * summary["asr_substring"],
@@ -232,9 +264,11 @@ def run_generation(behavior: Behavior, items: list[Item], prompts: list[str],
             record("steer", layer, fraction,
                    Intervention.from_direction(layer, direction, scale, fraction,
                                                positions, "steer"))
-            record("rand", layer, fraction,
-                   Intervention.from_direction(layer, rand_dir, scale, fraction,
-                                               positions, "rand"))
+            for r in range(n_rand):
+                rand_dir = random_direction(hidden, control_seed(seed, layer, fraction, r))
+                record("rand", layer, fraction,
+                       Intervention.from_direction(layer, rand_dir, scale, fraction,
+                                                   positions, "rand"), replicate=r)
     logger.info("wrote %s", completions_path)
     return summaries
 
@@ -281,7 +315,20 @@ def main():
                         help="skip the teacher-forced positive-vs-negative continuation "
                              "gap, which costs two extra forward passes per grid point")
     parser.add_argument("--batch_size", type=int, default=8)
-    parser.add_argument("--seed", type=int, default=42, help="random control direction")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="base seed for the random control. The direction is drawn "
+                             "per (layer, fraction, replicate) from this, so the control "
+                             "is an independent draw at each grid cell rather than one "
+                             "direction reused across the whole sweep")
+    parser.add_argument("--n_rand", type=int, default=3,
+                        help="random control directions per grid cell in the cheap sweep "
+                             "(default 3). >1 is what puts an error bar on the arm every "
+                             "effect size here is measured against; with 1 there is no "
+                             "way to tell a real effect from one unlucky draw")
+    parser.add_argument("--gen_n_rand", type=int, default=1,
+                        help="random control directions per generation point (default 1). "
+                             "Each one costs a full decode of the arm plus its judge "
+                             "calls, which is why this is not --n_rand")
 
     parser.add_argument("--generate", action="store_true",
                         help="also decode --max_new_tokens per prompt and score them. "
@@ -396,10 +443,13 @@ def main():
     steering = build_steering_vectors(prompt_format.render_contrast_pairs(behavior, fmt),
                                       layers)
 
+    if args.n_rand < 1 or args.gen_n_rand < 1:
+        raise SystemExit("--n_rand and --gen_n_rand need at least one control direction")
+
     rows = sweep_grid(behavior, prompts, pos_targets, neg_targets, steering,
                       fractions=fractions, layers=layers, positions=args.positions,
                       seed=args.seed, batch_size=args.batch_size,
-                      want_target_gap=not args.no_target_gap)
+                      want_target_gap=not args.no_target_gap, n_rand=args.n_rand)
 
     payload = {
         "model_name": args.model_name,
@@ -408,6 +458,8 @@ def main():
         "n_prompts": len(prompts),
         "fractions": fractions,
         "positions": args.positions,
+        "seed": args.seed,
+        "n_rand": args.n_rand,
         "word_pos": pos_targets[0],
         "word_neg": neg_targets[0],
         "layers": rows,
@@ -437,7 +489,7 @@ def main():
         behavior, items, prompts, steering, points=points, positions=args.positions,
         seed=args.seed, max_new_tokens=args.max_new_tokens, batch_size=args.batch_size,
         judges=judges, stop_at_newline_pair=args.stop_at_newline_pair,
-        out_dir=out_dir)
+        out_dir=out_dir, n_rand=args.gen_n_rand)
 
     evaluation = {
         "model_name": args.model_name,
@@ -445,6 +497,8 @@ def main():
         "arm": arm,
         "n_prompts": len(prompts),
         "positions": args.positions,
+        "seed": args.seed,
+        "n_rand": args.gen_n_rand,
         "max_new_tokens": args.max_new_tokens,
         "judges": [j.name for j in judges],
         "judge_thresholds": {_judge_key(j): j.threshold for j in judges},
