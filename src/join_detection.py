@@ -38,6 +38,29 @@ def _detected(entry: dict, h_norm: float, rel_tol: float | None) -> bool:
     return entry["residual"] > rel_tol * h_norm
 
 
+def _ungraded(value) -> bool:
+    """A judge that would not grade writes None for the binary and NaN for the score."""
+    return value is None or (isinstance(value, float) and math.isnan(value))
+
+
+def _side(found: dict, arm: str, replicate: int) -> dict | None:
+    """The audit's record of the same intervention this generation row ran under."""
+    if arm == "rand" and replicate:
+        return (found.get("rand_extra") or {}).get(str(replicate))
+    return found.get(arm)
+
+
+def positions_seen(rows: list[dict], arms_only: bool = False) -> set[str]:
+    """Which --positions the rows were produced under; '?' for files written before
+    the field existed, which is not the same as knowing they were 'last'."""
+    seen = set()
+    for row in rows:
+        if arms_only and row.get("arm") not in ARMS:
+            continue
+        seen.add(row.get("positions") or "?")
+    return seen
+
+
 def join(completions: list[dict], audit: list[dict], *, rel_tol: float | None,
          jailbroken_field: str) -> list[dict]:
     index: dict[tuple, dict] = {}
@@ -45,7 +68,7 @@ def join(completions: list[dict], audit: list[dict], *, rel_tol: float | None,
         index[(row["prompt"], row["layer"], row["fraction"])] = row
 
     joined = []
-    misses = 0
+    misses = ungraded = unpaired = 0
     for gen in completions:
         if gen["arm"] not in ARMS or gen["layer"] is None or gen["fraction"] is None:
             continue
@@ -54,16 +77,25 @@ def join(completions: list[dict], audit: list[dict], *, rel_tol: float | None,
         if found is None:
             misses += 1
             continue
-        side = found[gen["arm"]]
+        verdict = gen.get(jailbroken_field)
+        if verdict is None or (isinstance(verdict, float) and math.isnan(verdict)):
+            ungraded += 1
+            continue
+        replicate = int(gen.get("replicate") or 0)
+        side = _side(found, gen["arm"], replicate)
+        if side is None:
+            unpaired += 1
+            continue
         h_norm = found["h_norm"]
         joined.append({
             "prompt": gen["prompt"],
             "question": gen.get("question"),
             "category": gen.get("category"),
             "arm": gen["arm"],
+            "replicate": replicate,
             "layer": gen["layer"],
             "fraction": gen["fraction"],
-            "jailbroken": int(gen.get(jailbroken_field, 0)),
+            "jailbroken": int(verdict),
             "jailbroken_substring": int(gen.get("jailbroken_substring", 0)),
             "behavior_hit": gen.get("behavior_hit"),
             **{k: gen[k] for k in gen if k.startswith("judge_") and k.endswith("_score")},
@@ -76,6 +108,15 @@ def join(completions: list[dict], audit: list[dict], *, rel_tol: float | None,
     if misses:
         logger.info("%d generated rows had no audit row and were dropped "
                     "(steer_audit usually runs on fewer prompts)", misses)
+    if ungraded:
+        logger.warning("%d rows had no %s verdict and were dropped, not counted as "
+                       "not-jailbroken; every rate below is over the rows that graded",
+                       ungraded, jailbroken_field)
+    if unpaired:
+        logger.warning("%d rows ran a control replicate the audit does not have and were "
+                       "dropped; re-run steer_audit with --n_rand > %d to pair them",
+                       unpaired, max((int(r.get("replicate") or 0) for r in completions),
+                                     default=0))
     return joined
 
 
@@ -105,13 +146,14 @@ def summarize(rows: list[dict]) -> list[dict]:
         at = [r for r in rows if (r["layer"], r["fraction"], r["arm"]) == (layer, fraction, arm)]
         entry = {
             "arm": arm, "layer": layer, "fraction": fraction,
+            "replicates": len({r.get("replicate", 0) for r in at}),
             **contingency(at),
             "asr_substring": sum(r["jailbroken_substring"] for r in at) / len(at),
             "rel_residual_mean": sum(r["rel_residual"] for r in at) / len(at),
             "margin_spent_mean": sum(r["margin_spent"] for r in at) / len(at),
         }
         for key in sorted(k for k in at[0] if k.startswith("judge_") and k.endswith("_score")):
-            vals = [r[key] for r in at if r[key] is not None]
+            vals = [r[key] for r in at if not _ungraded(r[key])]
             entry[f"{key}_mean"] = sum(vals) / len(vals) if vals else None
         out.append(entry)
     return out
@@ -205,6 +247,12 @@ def main():
     parser.add_argument("--jailbroken_field", type=str, default="jailbroken_judge",
                         help="which column counts as a jailbreak (default the canonical "
                              "judge; 'jailbroken_substring' for the upper-bound metric)")
+    parser.add_argument("--allow_positions_mismatch", action="store_true",
+                        help="join anyway when the two stages steered different positions. "
+                             "The result is not a 2x2 on one intervention -- it pairs a "
+                             "generation under one steer with a detection of another -- "
+                             "and exists only to re-read files written before steer_audit "
+                             "had --positions")
     parser.add_argument("--out", type=Path, default=None,
                         help="default: <behavior dir>/detection_vs_efficacy.json")
     parser.add_argument("--rows_out", type=Path, default=None,
@@ -234,6 +282,34 @@ def main():
         available = sorted(k for k in completions[0] if k.startswith("jailbroken"))
         raise SystemExit(f"--jailbroken_field {args.jailbroken_field!r} is not in "
                          f"{completions_path}; have {available}")
+
+    gen_positions = positions_seen(completions, arms_only=True)
+    audit_positions = positions_seen(audit)
+    if "?" in gen_positions or "?" in audit_positions:
+        logger.warning(
+            "cannot verify that both stages steered the same positions: %s wrote %s, the "
+            "audit wrote %s ('?' = written before the field existed). Files from before "
+            "steer_audit had --positions were generated at the driver's default of ALL "
+            "and audited at LAST, which is not one intervention.",
+            completions_path.name, sorted(gen_positions), sorted(audit_positions))
+    elif gen_positions != audit_positions:
+        message = (
+            f"the two stages steered different positions: generation {sorted(gen_positions)}, "
+            f"audit {sorted(audit_positions)}. Joining them crosses efficacy under one "
+            f"intervention with detection of another. Re-run steer_audit with "
+            f"--positions {sorted(gen_positions)[0]}, or pass --allow_positions_mismatch "
+            f"to read the old pairing anyway."
+        )
+        if not args.allow_positions_mismatch:
+            raise SystemExit(message)
+        logger.warning("%s", message)
+
+    orphans = {r["prompt"] for r in audit} - {r["prompt"] for r in completions
+                                              if r.get("arm") in ARMS}
+    if orphans:
+        logger.warning("%d audited prompt(s) are absent from the generation run, so the "
+                       "two stages sampled differently and only their overlap can join",
+                       len(orphans))
 
     rows = join(completions, audit, rel_tol=args.rel_tol,
                 jailbroken_field=args.jailbroken_field)
@@ -272,6 +348,7 @@ def main():
         "jailbroken_field": args.jailbroken_field,
         "completions": str(completions_path),
         "audit_dir": str(audit_dir),
+        "positions": sorted(gen_positions | audit_positions),
         "n_joined": len(rows),
         "pooled_steer": overall,
         "points": summary,
