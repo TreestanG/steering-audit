@@ -19,7 +19,13 @@ from log import add_logging_args, get_logger
 from log import setup as log_setup
 from paths import behavior_dir, logs_dir
 from scoring import score_completion
-from steering import build_steering_vectors, efficacy, first_token_id
+from steering import (
+    PICK_BY,
+    best_layer,
+    build_steering_vectors,
+    efficacy,
+    first_token_id,
+)
 from utils import DTYPES, add_model_args, load_model, model_device
 
 logger = get_logger(__name__)
@@ -112,26 +118,6 @@ def sweep_grid(behavior: Behavior, prompts: list[str], pos_targets: list[str],
                         f"{entry['target_gap_mean']:.4f}" if want_target_gap else "-")
             rows.append(entry)
     return rows
-
-
-PICK_BY = ("flip", "gap", "target_gap")
-
-
-def best_layer(rows: list[dict], fraction: float, by: str = "flip") -> int:
-    at = [r for r in rows if r["fraction"] == fraction] or rows
-    sign = -1.0 if fraction < 0 else 1.0
-    if by == "flip":
-        key = lambda r: (r["flip_rate"], r["kl_mean"])
-    elif by == "gap":
-        key = lambda r: sign * r["steered_gap_mean"]
-    elif by == "target_gap":
-        if "target_gap_mean" not in at[0]:
-            raise SystemExit("--gen_pick_by target_gap needs the teacher-forced gap; "
-                             "drop --no_target_gap")
-        key = lambda r: sign * r["target_gap_mean"]
-    else:
-        raise SystemExit(f"--gen_pick_by: expected one of {PICK_BY}, got {by!r}")
-    return int(max(at, key=key)["layer"])
 
 
 def _score_rows(behavior: Behavior, items: list[Item], prompts: list[str],

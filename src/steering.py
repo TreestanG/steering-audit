@@ -166,3 +166,44 @@ def steered_logits(prompt, hook_fn, layer):
         return last_token_logits(prompt)
     finally:
         handle.remove()
+
+
+# --------------------------------------------------- which layer to steer at
+
+PICK_BY = ("flip", "gap", "target_gap")
+
+
+def best_layer(rows: list[dict], fraction: float, by: str = "flip") -> int:
+    """The layer a behavior steers best at, at one strength, from gaps.json rows.
+
+    Shared by behavior_eval (--gen_pick_by) and pgd_attack (--pick_by) so the two
+    stages of one experiment cannot silently choose different layers.
+
+    `flip` is (flip rate, KL) -- the historical rule, kept as the default so the
+    sentiment path picks the layer it always did.
+
+    It is the wrong rule for a jailbreak, and that is why the others exist. Flip rate
+    and KL both rise when the steer simply wrecks the model, so on a refusal behavior
+    `flip` reliably selects the last block, where a large perturbation destroys the
+    output and nothing has been steered at all. `gap` and `target_gap` are directed:
+    they are signed by the fraction, so a negative fraction scores a layer by how far
+    it moved AWAY from the behavior, which is what the attack wants.
+    """
+    at = [r for r in rows if r["fraction"] == fraction] or rows
+    sign = -1.0 if fraction < 0 else 1.0
+    if by == "flip":
+        def key(r):
+            return (r["flip_rate"], r["kl_mean"])
+    elif by == "gap":
+        def key(r):
+            return sign * r["steered_gap_mean"]
+    elif by == "target_gap":
+        if "target_gap_mean" not in at[0]:
+            raise SystemExit("pick_by target_gap needs the teacher-forced gap in "
+                             "gaps.json; re-run the sweep without --no_target_gap")
+
+        def key(r):
+            return sign * r["target_gap_mean"]
+    else:
+        raise SystemExit(f"pick_by: expected one of {PICK_BY}, got {by!r}")
+    return int(max(at, key=key)["layer"])
