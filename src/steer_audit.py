@@ -11,7 +11,12 @@ import behaviors
 import prompt_format
 import sipit
 from sipit import Top2
-from steering import _steer_hidden, build_steering_vectors
+from steering import (
+    build_steering_vectors,
+    control_seed,
+    make_delta_hook,
+    random_direction,
+)
 from log import add_logging_args, get_logger
 from log import setup as log_setup
 from paths import logs_dir, steer_dir
@@ -36,16 +41,11 @@ def steering_delta(direction: Tensor, scale: Tensor, fraction: float) -> Tensor:
 
 
 def random_delta(hidden_size: int, scale: Tensor, fraction: float, seed: int) -> Tensor:
-    g = torch.Generator().manual_seed(seed)
-    v = torch.randn(hidden_size, generator=g)
-    return fraction * scale * v / v.norm()
+    return steering_delta(random_direction(hidden_size, seed), scale, fraction)
 
 
-def make_delta_hook(delta: Tensor):
-    def add(module, input, output):
-        return _steer_hidden(output, delta)
-
-    return add
+def rand_kind(replicate: int) -> str:
+    return "rand" if replicate == 0 else f"rand{replicate}"
 
 
 @torch.no_grad()
@@ -97,8 +97,11 @@ def prefix_cache(prompt: str):
 
 @torch.no_grad()
 def build_targets(prompt: str, steering: dict[int, tuple[Tensor, Tensor]], *,
-                  layers: list[int], fractions: list[float], seed: int):
+                  layers: list[int], fractions: list[float], seed: int,
+                  positions: str = "last", n_rand: int = 1):
     model, _ = require_model()
+    all_positions = positions == "all"
+    hidden = model.config.hidden_size
     clean = layer_states(prompt, layers)
     targets: dict[tuple[int, str, float | None], Tensor] = {}
     deltas: dict[tuple[int, float], dict[str, Tensor]] = {}
@@ -106,13 +109,14 @@ def build_targets(prompt: str, steering: dict[int, tuple[Tensor, Tensor]], *,
         targets[layer, "clean", None] = clean[layer]
         direction, scale = steering[layer]
         for fraction in fractions:
-            d_steer = steering_delta(direction, scale, fraction)
-            d_rand = random_delta(model.config.hidden_size, scale, fraction, seed)
-            deltas[layer, fraction] = {"steer": d_steer, "rand": d_rand}
-            targets[layer, "steer", fraction] = layer_state(
-                prompt, layer, make_delta_hook(d_steer))
-            targets[layer, "rand", fraction] = layer_state(
-                prompt, layer, make_delta_hook(d_rand))
+            sides = {"steer": steering_delta(direction, scale, fraction)}
+            for r in range(n_rand):
+                sides[rand_kind(r)] = random_delta(
+                    hidden, scale, fraction, control_seed(seed, layer, fraction, r))
+            deltas[layer, fraction] = sides
+            for kind, delta in sides.items():
+                targets[layer, kind, fraction] = layer_state(
+                    prompt, layer, make_delta_hook(delta, all_positions=all_positions))
     return targets, deltas
 
 
@@ -159,10 +163,13 @@ def audit_prompt(
     rel_tol: float,
     chunk: int,
     seed: int,
+    positions: str = "last",
+    n_rand: int = 1,
 ) -> dict[float, list[dict]]:
     prefix, true_id, cache = prefix_cache(prompt)
     targets, deltas = build_targets(prompt, steering, layers=layers,
-                                    fractions=fractions, seed=seed)
+                                    fractions=fractions, seed=seed,
+                                    positions=positions, n_rand=n_rand)
     tracked = scan_vocab(cache, len(prefix), targets, chunk)
 
     rows: dict[float, list[dict]] = {f: [] for f in fractions}
@@ -171,37 +178,39 @@ def audit_prompt(
         h_norm = float(targets[layer, "clean", None].norm())
         gap = clean.gap
         for fraction in fractions:
-            steer = tracked[layer, "steer", fraction]
-            rand = tracked[layer, "rand", fraction]
-            rows[fraction].append(
-                {
-                    "prompt": prompt,
-                    "layer": layer,
-                    "fraction": fraction,
-                    "h_norm": h_norm,
-                    "true_token": true_id,
-                    "rel_gap": gap / h_norm,
-                    "clean": {
-                        "residual": clean.best,
-                        "gap": gap,
-                        "token": clean.best_id,
-                        "recovered": clean.best_id == true_id,
-                    },
-                    **{
-                        kind: {
-                            "delta_norm": float(deltas[layer, fraction][kind].norm()),
-                            "residual": t.best,
-                            "gap": t.gap,
-                            "token": t.best_id,
-                            "recovered": t.best_id == true_id,
-                            "rel_residual": t.best / h_norm,
-                            "margin_spent": t.best / gap if gap > 0 else float("inf"),
-                            "detected": t.best > rel_tol * h_norm,
-                        }
-                        for kind, t in (("steer", steer), ("rand", rand))
-                    },
+            def side(kind: str, fraction: float = fraction, layer: int = layer) -> dict:
+                t = tracked[layer, kind, fraction]
+                return {
+                    "delta_norm": float(deltas[layer, fraction][kind].norm()),
+                    "residual": t.best,
+                    "gap": t.gap,
+                    "token": t.best_id,
+                    "recovered": t.best_id == true_id,
+                    "rel_residual": t.best / h_norm,
+                    "margin_spent": t.best / gap if gap > 0 else float("inf"),
+                    "detected": t.best > rel_tol * h_norm,
                 }
-            )
+
+            row = {
+                "prompt": prompt,
+                "layer": layer,
+                "fraction": fraction,
+                "positions": positions,
+                "h_norm": h_norm,
+                "true_token": true_id,
+                "rel_gap": gap / h_norm,
+                "clean": {
+                    "residual": clean.best,
+                    "gap": gap,
+                    "token": clean.best_id,
+                    "recovered": clean.best_id == true_id,
+                },
+                "steer": side("steer"),
+                "rand": side("rand"),
+            }
+            if n_rand > 1:
+                row["rand_extra"] = {str(r): side(rand_kind(r)) for r in range(1, n_rand)}
+            rows[fraction].append(row)
     return rows
 
 
@@ -290,8 +299,34 @@ def main():
         default=None,
         help="detection threshold: residual > rel_tol * ||h|| counts as caught",
     )
+    parser.add_argument(
+        "--positions",
+        type=str,
+        default="last",
+        choices=["last", "all"],
+        help="which positions the audited steer touches. MUST match the --positions the "
+             "behavior_eval run used -- 'all' is the driver's default and was not "
+             "expressible here before, so the two stages recorded different "
+             "interventions. Measured caveat: this audit inverts ONE position, the last, "
+             "and reads it at the layer the delta went in, where the perturbation to the "
+             "earlier positions has not reached it yet. The target state is therefore "
+             "bit-identical under 'last' and 'all' (checked on gpt2), so the flag records "
+             "provenance and lets the join verify the pairing -- it does not widen "
+             "coverage. Under 'all' the other n-1 positions are equally perturbed and "
+             "unaudited, so the detection rate is a LOWER bound: auditing them can only "
+             "add detections",
+    )
     parser.add_argument("--chunk", type=int, default=2048, help="candidates per forward")
-    parser.add_argument("--seed", type=int, default=42, help="random control direction")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="base seed for the random control; the direction is drawn "
+                             "per (layer, fraction, replicate) from it, matching "
+                             "behavior_eval so the two stages audit the same control")
+    parser.add_argument("--n_rand", type=int, default=3,
+                        help="random control directions per cell (default 3). All of them "
+                             "ride the same vocabulary scan, so extra draws are nearly "
+                             "free here; replicate 0 is the one the join pairs against "
+                             "generation and lands in the 'rand' key, the rest in "
+                             "'rand_extra'")
     parser.add_argument(
         "--out",
         type=Path,
@@ -336,9 +371,17 @@ def main():
         if args.layers
         else list(range(1, model.config.num_hidden_layers + 1))
     )
+    if args.n_rand < 1:
+        raise SystemExit("--n_rand: need at least one control direction")
     prompts = prompt_format.render_prompts(
         behavior, behavior.items(arm, args.n_prompts), fmt)
-    logger.info("behavior %s, arm %s, prompt_format %s", behavior.name, arm, fmt)
+    logger.info("behavior %s, arm %s, prompt_format %s, positions %s",
+                behavior.name, arm, fmt, args.positions)
+    if args.positions == "all":
+        logger.warning("--positions all: only the last position is inverted, and its "
+                       "state at the injection layer is identical to --positions last. "
+                       "The other steered positions go unaudited, so this detection rate "
+                       "is a lower bound on what a per-position detector would catch")
     single = len(fractions) == 1
     paths = ({fractions[0]: args.out} if single
              else {f: args.out_dir / f"steer_audit_f{f:g}.jsonl" for f in fractions})
@@ -361,6 +404,8 @@ def main():
                 rel_tol=rel_tol,
                 chunk=args.chunk,
                 seed=args.seed,
+                positions=args.positions,
+                n_rand=args.n_rand,
             )
             for fraction, fraction_rows in got.items():
                 for row in fraction_rows:
