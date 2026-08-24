@@ -43,7 +43,16 @@ Options:
   --n_prompts N      0 = the whole arm (default)
   --max_new_tokens N default 256. Arditi et al. use 512
   --positions P      last | all (default all -- a behavior has to survive the whole
-                     completion, and one steered position cannot carry it)
+                     completion, and one steered position cannot carry it). Now passed to
+                     BOTH the generation and the audit, so the 2x2 records one
+                     intervention. The audit still inverts only the LAST position, so at
+                     'all' its detection rate is a lower bound: the other steered
+                     positions are never checked
+  --audit_prompts N  prompts to audit (default 5). Sampled round-robin over categories,
+                     so the audited set is a prefix of the generated one and the two
+                     join. This also bounds the join: only prompts present in BOTH
+                     stages can be joined, so a small number here is a small
+                     denominator on the evasion-window figure
   --judge J          substring (default) | fireworks | none.
                      fireworks needs FIREWORKS_API_KEY (or FIREWORKS_KEY, or a
                      gitignored .env) and sends the goals and the completions to a
@@ -58,9 +67,6 @@ Options:
   --no_audit         skip the detection stage (it is the expensive one: a full
                      vocabulary scan per prompt). Also skips the join, which has
                      nothing to join without it
-  --audit_prompts N  prompts to audit (default 5). This also bounds the join: only
-                     prompts present in BOTH stages can be joined, so a small number
-                     here is a small denominator on the evasion-window figure
   --join_rel_tol T   re-derive detection at this threshold in the join. Free -- the
                      audit rows carry residual and ||h||, so a different threshold is
                      a re-read, not a re-run
@@ -240,7 +246,8 @@ run_one_model() {
     if [[ $DO_AUDIT -eq 1 ]]; then
         stage audit "$SDIR/audit.jsonl $SDIR/fractions/*.jsonl" \
             uv run src/steer_audit.py "${COMMON[@]}" \
-                "--fractions=${GEN_FRACTIONS:-$FRACTIONS}" --n_prompts "$AUDIT_PROMPTS"
+                "--fractions=${GEN_FRACTIONS:-$FRACTIONS}" --n_prompts "$AUDIT_PROMPTS" \
+                --positions "$POSITIONS"
 
         local JOIN=(--model_name "$MODEL" --behavior "$BEHAVIOR")
         [[ -n $JOIN_REL_TOL ]] && JOIN+=(--rel_tol "$JOIN_REL_TOL")
