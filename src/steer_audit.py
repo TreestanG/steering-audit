@@ -285,7 +285,11 @@ def main():
         "--n_prompts",
         type=int,
         default=5,
-        help="a full vocab scan per prompt covers every layer, so this is the runtime knob",
+        help="a full vocab scan per prompt covers every layer, so this is the runtime "
+             "knob: 49s per prompt on Qwen-0.5B fp32 over 24 layers and 3 fractions, "
+             "scaling with model size. 5 is a smoke default -- when this audit feeds "
+             "join_detection it also sets the denominator on the evasion-window figure, "
+             "and run_behavior.sh passes 30 for that reason",
     )
     parser.add_argument(
         "--layers",
