@@ -60,18 +60,20 @@ class Behavior:
     def arm_names(self) -> list[str]:
         return list(self.arms)
 
-    def items(self, arm: str | None = None, n: int = 0) -> list[Item]:
+    def items(self, arm: str | None = None, n: int = 0, stratify: bool = True) -> list[Item]:
         arm = arm or self.default_arm
         if arm not in self.arms:
             raise KeyError(f"{self.name}: no test arm {arm!r} (have {self.arm_names()})")
         got = list(self.arms[arm])
-        return got[:n] if n else got
+        if not n or n >= len(got):
+            return got
+        return stratified(got, n) if stratify else got[:n]
 
     def prompt_for(self, item: Item) -> str:
         return self.test_template.format(question=item.question)
 
-    def prompts(self, arm: str | None = None, n: int = 0) -> list[str]:
-        return [self.prompt_for(item) for item in self.items(arm, n)]
+    def prompts(self, arm: str | None = None, n: int = 0, stratify: bool = True) -> list[str]:
+        return [self.prompt_for(item) for item in self.items(arm, n, stratify)]
 
     def target_for(self, item: Item, side: str) -> str | None:
         if side not in ("pos", "neg"):
@@ -80,6 +82,29 @@ class Behavior:
         if target is not None:
             return target
         return item.target
+
+
+def stratified(items: list[Item], n: int) -> list[Item]:
+    """First n in round-robin category order, rather than the first n in file order.
+
+    JailbreakBench ships 100 prompts as 10 contiguous blocks of 10 categories, so a
+    plain head takes 2 of 10 categories at n=20 and calls it a sample of the benchmark.
+
+    Round-robin is prefix-consistent -- the n=5 sample is the first 5 of the n=20
+    sample -- so a small audit stays a subset of a larger generation run and the two
+    still join.
+    """
+    by_category: dict[str | None, list[Item]] = {}
+    for item in items:
+        by_category.setdefault(item.category, []).append(item)
+    if len(by_category) < 2:
+        return items[:n]
+    ordered = []
+    for tier in range(max(len(group) for group in by_category.values())):
+        for group in by_category.values():
+            if tier < len(group):
+                ordered.append(group[tier])
+    return ordered[:n]
 
 
 def _items(raw: list, arm: str) -> tuple[Item, ...]:
