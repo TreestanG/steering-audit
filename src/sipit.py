@@ -233,10 +233,11 @@ def candidate_states(cache, prefix_len: int, candidates: Tensor, layer: int) -> 
         handle.remove()
 
 
-def _step(top2: Top2, *, tol: float, h_norm: float, tried: int, exhaustive: bool) -> dict:
+def _step(top2: Top2, *, tol: float, h_norm: float, tried: int, exhaustive: bool,
+          gold: int | None = None) -> dict:
     """One position's result row, shared by the position-0 lookup and the vocab scan."""
     gap = top2.gap
-    return {
+    step = {
         "token": top2.best_id,
         "residual": top2.best,
         "runner_up": top2.runner,
@@ -252,6 +253,11 @@ def _step(top2: Top2, *, tol: float, h_norm: float, tried: int, exhaustive: bool
         "tried": tried,
         "matched": top2.best <= tol,
     }
+    # matched is the alarm; correct is the truth. They can disagree.
+    if gold is not None:
+        step["gold_token"] = gold
+        step["correct"] = top2.best_id == gold
+    return step
 
 
 @torch.no_grad()
@@ -266,6 +272,7 @@ def solve_position(
     abs_tol: float,
     schedule: tuple[int, ...],
     exhaustive: bool,
+    gold: int | None = None,
 ) -> dict:
     """Find the token whose h_layer at this position equals target."""
     model, _ = require_model()
@@ -290,7 +297,7 @@ def solve_position(
             break
 
     return _step(top2, tol=tol, h_norm=float(target.norm()), tried=tried,
-                 exhaustive=tried >= vocab_size)
+                 exhaustive=tried >= vocab_size, gold=gold)
 
 
 @torch.no_grad()
@@ -304,10 +311,15 @@ def sipit(
     schedule: tuple[int, ...] = DEFAULT_SCHEDULE,
     exhaustive: bool = False,
     stop_on_fail: bool = True,
+    gold: list[int] | None = None,
 ) -> list[dict]:
     """Recover the token sequence behind target [seq, hidden] at one layer."""
     steps: list[dict] = []
     n_vocab = vocab_layer.shape[0]
+
+    def gold_at(t: int) -> int | None:
+        return gold[t] if gold is not None and t < len(gold) else None
+
     top2 = Top2()
     top2.update(dists_to(target[0], vocab_layer), torch.arange(n_vocab))
     steps.append(
@@ -317,6 +329,7 @@ def sipit(
             h_norm=float(target[0].norm()),
             tried=n_vocab,
             exhaustive=True,  # position 0 is a full table lookup
+            gold=gold_at(0),
         )
     )
     token0 = steps[0]["token"]
@@ -333,6 +346,7 @@ def sipit(
         step = solve_position(
             cache, prefix_len, logits, target[t], layer,
             rel_tol=rel_tol, abs_tol=abs_tol, schedule=schedule, exhaustive=exhaustive,
+            gold=gold_at(t),
         )
         steps.append(step)
         if stop_on_fail and not step["matched"]:
@@ -375,6 +389,13 @@ def invert_file(
         # pass. Perturb t>0 only, which is also where a steer would land.
         target = torch.cat([target[:1], target[1:] + noise * v / v.norm()])
 
+    gold = None
+    gold_text = gold_by_id.get(blob["id"])
+    if gold_text is not None:
+        gold = tokenizer(gold_text, return_tensors="pt")["input_ids"][0].tolist()
+        if max_len:
+            gold = gold[:max_len]
+
     start = time.time()
     steps = sipit(
         target,
@@ -385,6 +406,7 @@ def invert_file(
         schedule=schedule,
         exhaustive=exhaustive,
         stop_on_fail=stop_on_fail,
+        gold=gold,
     )
     elapsed = time.time() - start
 
@@ -404,13 +426,9 @@ def invert_file(
     max_residual = max(s["residual"] for s in steps)
     logger.debug("max residual: %.6g", max_residual)
 
-    exact = None
-    gold_text = gold_by_id.get(blob["id"])
-    if gold_text is not None:
-        gold = tokenizer(gold_text, return_tensors="pt")["input_ids"][0].tolist()
-        if max_len:
-            gold = gold[:max_len]
-        exact = recovered == gold
+    exact = None if gold is None else recovered == gold
+    first_fail = next((i for i, s in enumerate(steps) if not s["matched"]), None)
+    first_wrong = next((i for i, s in enumerate(steps) if not s.get("correct", True)), None)
 
     # One line per prompt is the right granularity for a stage that runs for
     # hours; the recovered text is only interesting when it went wrong.
@@ -436,17 +454,16 @@ def invert_file(
         "recovered_ids": recovered,
         "recovered_text": recovered_text,
         "exact": exact,
+        "first_fail": first_fail,
+        "first_wrong": first_wrong,
+        "silent_corruption": (first_wrong is not None
+                              and (first_fail is None or first_wrong < first_fail)),
         "steps": [
             {
-                "token": s["token"],
-                "residual": s["residual"],
-                "gap": s["gap"],
-                "ratio": s["ratio"],
-                "gap_exhaustive": s["gap_exhaustive"],
-                "tol": s["tol"],
-                "h_norm": s["h_norm"],
-                "tried": s["tried"],
-                "matched": s["matched"],
+                k: s[k] for k in
+                ("token", "residual", "gap", "ratio", "gap_exhaustive", "tol",
+                 "h_norm", "tried", "matched", "gold_token", "correct")
+                if k in s
             }
             for s in steps
         ],
