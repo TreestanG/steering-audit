@@ -14,7 +14,8 @@ def load_pairs(path):
     return list(data.values())
 
 
-def build_steering_vectors(pairs, layers=None, batch_size: int = 8):
+def build_steering_vectors(pairs, layers: list[int] | None = None,
+                           batch_size: int = 8) -> dict[int, tuple[Tensor, Tensor]]:
     if layers is None:
         layers = list(range(1, len(get_decoder_layers()) + 1))
 
@@ -192,18 +193,15 @@ def best_layer(rows: list[dict], fraction: float, by: str = "flip") -> int:
     at = [r for r in rows if r["fraction"] == fraction] or rows
     sign = -1.0 if fraction < 0 else 1.0
     if by == "flip":
-        def key(r):
-            return (r["flip_rate"], r["kl_mean"])
+        key = lambda r: (r["flip_rate"], r["kl_mean"])
     elif by == "gap":
-        def key(r):
-            return sign * r["steered_gap_mean"]
+        key = lambda r: sign * r["steered_gap_mean"]
     elif by == "target_gap":
         if "target_gap_mean" not in at[0]:
             raise SystemExit("pick_by target_gap needs the teacher-forced gap in "
                              "gaps.json; re-run the sweep without --no_target_gap")
 
-        def key(r):
-            return sign * r["target_gap_mean"]
+        key = lambda r: sign * r["target_gap_mean"]
     else:
         raise SystemExit(f"pick_by: expected one of {PICK_BY}, got {by!r}")
     return int(max(at, key=key)["layer"])

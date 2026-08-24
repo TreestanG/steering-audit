@@ -1,7 +1,13 @@
 from dataclasses import dataclass
 
+from typing import TYPE_CHECKING, cast
+
 import torch
 from torch import Tensor
+from transformers import GenerationMixin
+
+if TYPE_CHECKING:
+    from transformers._typing import GenerativePreTrainedModel
 
 from log import get_logger, heartbeat
 from steering import unit_delta
@@ -102,6 +108,7 @@ def generate_completions(
     stop_at_newline_pair: bool = False,
 ) -> list[str]:
     model, tokenizer = require_model()
+    assert isinstance(model, GenerationMixin)
     out: list[str] = []
     for start in range(0, len(prompts), batch_size):
         chunk = prompts[start:start + batch_size]
@@ -110,7 +117,7 @@ def generate_completions(
         try:
             # generate() derives its own position_ids per decode step, and passing the
             # prefill ones would pin every generated token to the last prompt position.
-            generated = model.generate(
+            generated = cast("GenerativePreTrainedModel", model).generate(
                 **{k: v for k, v in inputs.items() if k != "position_ids"},
                 max_new_tokens=max_new_tokens,
                 do_sample=False,
@@ -119,6 +126,7 @@ def generate_completions(
         finally:
             for h in handles:
                 h.remove()
+        assert isinstance(generated, Tensor)
         new = generated[:, inputs["input_ids"].shape[1]:]
         texts = tokenizer.batch_decode(new, skip_special_tokens=True)
         if stop_at_newline_pair:
@@ -149,6 +157,7 @@ def target_logprobs(
         width = max(len(s) for s in seqs)
 
         pad = tokenizer.pad_token_id
+        assert isinstance(pad, int)
         device = model_device()
         input_ids = torch.full((len(seqs), width), pad, dtype=torch.long)
         mask = torch.zeros((len(seqs), width), dtype=torch.long)

@@ -49,7 +49,7 @@ class Behavior:
 
     def contrast_pairs(self) -> list[tuple[str, str]]:
         if self.kind == PROMPT_PAIRS:
-            return [tuple(pair) for pair in self.train_pairs]
+            return [(pos, neg) for pos, neg in self.train_pairs]
         assert self.template is not None
         return [
             (self.template.format(system=self.pos_system, question=q),

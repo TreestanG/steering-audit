@@ -41,19 +41,21 @@ def recover_prompt(
     chunk: int,
 ) -> list[dict]:
     prefix, true_id, cache = prefix_cache(prompt)
-    targets, deltas = build_targets(prompt, steering, layers=layers, fraction=fraction, seed=seed)
+    targets, deltas = build_targets(prompt, steering, layers=layers,
+                                    fractions=[fraction], seed=seed)
     tracked = scan_vocab(cache, len(prefix), targets, chunk)
 
     rows = []
     for layer in layers:
         row = {"prompt": prompt, "layer": layer, "true_token": true_id}
-        clean_gap = tracked[layer, "clean"].gap
-        win_ids = [tracked[layer, "steer"].best_id, tracked[layer, "rand"].best_id]
+        clean_gap = tracked[layer, "clean", None].gap
+        win_ids = [tracked[layer, "steer", fraction].best_id,
+                   tracked[layer, "rand", fraction].best_id]
         h_hat = sipit.candidate_states(cache, len(prefix), torch.tensor(win_ids), layer)
         for j, kind in enumerate(("steer", "rand")):
-            t = tracked[layer, kind]
-            delta_hat = targets[layer, kind] - h_hat[j]
-            delta_true = deltas[layer][kind]
+            t = tracked[layer, kind, fraction]
+            delta_hat = targets[layer, kind, fraction] - h_hat[j]
+            delta_true = deltas[layer, fraction][kind]
             row[kind] = {
                 "recovered_token": t.best_id,
                 "recovered": t.best_id == true_id,

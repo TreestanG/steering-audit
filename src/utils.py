@@ -82,7 +82,7 @@ def load_model(
 
     model.eval()
     if device is not None:
-        model.to(resolve_device(str(device)))
+        cast(torch.nn.Module, model).to(resolve_device(str(device)))
     return model, tokenizer
 
 

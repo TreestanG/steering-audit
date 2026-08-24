@@ -427,8 +427,9 @@ def main():
     targets = None
     if args.objective == "target" or not args.no_target_gap:
         resolved = [behavior.target_for(item, args.target_side) for item in items]
-        if all(t is not None for t in resolved):
-            targets = resolved
+        present = [t for t in resolved if t is not None]
+        if len(present) == len(resolved):
+            targets = present
         elif args.objective == "target":
             raise SystemExit(f"{behavior.name}: objective 'target' needs a "
                              f"{args.target_side} target on every item")
@@ -438,9 +439,9 @@ def main():
 
     pos_targets = neg_targets = None
     if not args.no_target_gap:
-        p = [behavior.target_for(i, "pos") for i in items]
-        n = [behavior.target_for(i, "neg") for i in items]
-        if all(x is not None for x in p) and all(x is not None for x in n):
+        p = [t for t in (behavior.target_for(i, "pos") for i in items) if t is not None]
+        n = [t for t in (behavior.target_for(i, "neg") for i in items) if t is not None]
+        if len(p) == len(items) and len(n) == len(items):
             pos_targets, neg_targets = p, n
 
     judges = []

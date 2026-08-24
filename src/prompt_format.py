@@ -31,8 +31,10 @@ def resolve_format(fmt: str, behavior: Behavior) -> str:
 
 def _chat(messages: list[dict]) -> str:
     _, tokenizer = require_model()
-    return tokenizer.apply_chat_template(messages, tokenize=False,
+    text = tokenizer.apply_chat_template(messages, tokenize=False,
                                          add_generation_prompt=True)
+    assert isinstance(text, str)
+    return text
 
 
 def render_prompt(behavior: Behavior, item: Item, fmt: str) -> str:

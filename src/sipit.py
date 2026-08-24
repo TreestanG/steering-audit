@@ -179,7 +179,7 @@ def next_token_logits(hidden_last: Tensor) -> Tensor:
     return head(hidden_last)[0].float().cpu()
 
 
-def abs_position_embedding() -> torch.nn.Module | None:
+def abs_position_embedding() -> torch.nn.Embedding | None:
     """The learned absolute position embedding, if this architecture uses one.
 
     Rotary and ALiBi models inject position inside attention, so their layer-0

@@ -161,10 +161,9 @@ def plot(summary: list[dict], out: Path, *, rel_tol: float | None, title: str) -
         alpha = 0.45 if arm == "rand" else 1.0
         axes[0].plot(xs, [100 * s["asr"] for s in at], "o-", color=colour, lw=width,
                      alpha=alpha, label=f"{arm}: ASR")
-        scores = [s.get(key) for s in at] if key else []
-        if scores and all(v is not None for v in scores):
+        if key and all(s.get(key) is not None for s in at):
             name = key[len("judge_"):-len("_score_mean")]
-            axes[0].plot(xs, [100 * v for v in scores], "s--", color=colour, lw=width,
+            axes[0].plot(xs, [100 * s[key] for s in at], "s--", color=colour, lw=width,
                          alpha=alpha * 0.6, label=f"{arm}: {name} x100")
         axes[1].plot(xs, [100 * s["detection_rate"] for s in at], "o-", color=colour,
                      lw=width, alpha=alpha, label=f"{arm}: detected")

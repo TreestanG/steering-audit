@@ -75,6 +75,7 @@ def _encode_with_targets(prompts: list[str], targets: list[str]):
     width = max(len(p) + len(t) for p, t in zip(prompt_ids, target_ids))
     span = max(len(t) for t in target_ids)
     pad = tokenizer.pad_token_id
+    assert isinstance(pad, int)
 
     input_ids = torch.full((len(prompts), width), pad, dtype=torch.long)
     mask = torch.zeros((len(prompts), width), dtype=torch.long)
@@ -227,7 +228,8 @@ def _id(word) -> int:
     return word if isinstance(word, int) else token_id(word)
 
 
-def _objective(logits: Tensor, kind: str, clean: dict, word_pos: str, word_neg: str,
+def _objective(logits: Tensor, kind: str, clean: dict, word_pos: str | int,
+               word_neg: str | int,
                full_logits: Tensor | None = None) -> Tensor:
     if kind == "sentiment":
         return logits[:, _id(word_pos)] - logits[:, _id(word_neg)]
@@ -259,8 +261,8 @@ def evaluate_deltas(
     delta: Tensor,
     *,
     clean: dict,
-    word_pos: str,
-    word_neg: str,
+    word_pos: str | int,
+    word_neg: str | int,
     budget: float | None = None,
 ) -> list[dict]:
     if clean["layer"] != layer:
@@ -335,7 +337,8 @@ def _as_batch(delta: Tensor, clean: dict) -> Tensor:
 
 
 def evaluate_delta(prompt: str, layer: int, delta: Tensor, *, clean: dict,
-                   word_pos: str, word_neg: str, budget: float | None = None) -> dict:
+                   word_pos: str | int, word_neg: str | int,
+                   budget: float | None = None) -> dict:
     if clean["batch"] != 1 or clean["prompts"][0] != prompt:
         raise ValueError("`clean` was built for a different (prompt, layer)")
     return evaluate_deltas(layer, delta, clean=clean, word_pos=word_pos,
@@ -400,8 +403,8 @@ def pgd_attack_batch(
     layer: int,
     *,
     budget: float,
-    word_pos: str,
-    word_neg: str,
+    word_pos: str | int,
+    word_neg: str | int,
     steps: int = 200,
     lr: float | None = None,
     objective: str = "sentiment",
@@ -726,11 +729,12 @@ def main():
 
     targets = None
     if args.objective == "target":
-        targets = [behavior.target_for(item, args.target_side) for item in items]
-        missing = [i.index for i, t in zip(items, targets) if t is None]
+        resolved = [behavior.target_for(item, args.target_side) for item in items]
+        missing = [i.index for i, t in zip(items, resolved) if t is None]
         if missing:
             raise SystemExit(f"{behavior.name}: items {missing[:5]} have no "
                              f"{args.target_side} target, which the 'target' objective needs")
+        targets = [t for t in resolved if t is not None]
 
     logger.info("behavior %s, arm %s: %d prompts", behavior.name, arm_name, len(prompts))
     logger.info("layer %d (%s), budget %g = %g * rel_tol %g [%s], objective %s",
