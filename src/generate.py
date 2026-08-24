@@ -40,10 +40,7 @@ class Intervention:
                 else:
                     hidden += d
             elif positions == "first":
-                # Prefill only: position 0 exists in exactly one forward pass, and a
-                # decode step (seq len 1) must not re-add -- that would turn a
-                # one-position edit into an all-positions steer. Left padding means
-                # index 0 is a pad slot, not the first REAL token.
+                # prefill only; a decode step would re-add at every position
                 if hidden.shape[1] > 1:
                     rows = torch.arange(hidden.shape[0], device=hidden.device)
                     first = (mask.to(hidden.device).float().argmax(dim=1)
