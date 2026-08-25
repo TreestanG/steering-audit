@@ -1,27 +1,9 @@
-"""Per-trajectory detection: aggregate the per-position residuals, threshold at k sigma.
-
-The audit's native decision is per POSITION -- residual > rel_tol * ||h|| at one token.
-A deployed detector watches a whole generation, so that rule has to be aggregated, and
-the aggregation is not a formality: at the shipped fp16 threshold the per-position false
-positive rate is 0.06%, which over a 50-token completion audited at 24 layers compounds
-to roughly half of all clean prompts if the rule is "flag if ANY position fires".
-
-The rule here is the mean of the top k relative residuals in a trajectory, flagged when
-it exceeds mean + sigma * sd of the same statistic on clean text. Top-k sits between the
-two degenerate choices: k=1 is the max, which is what "any position fires" already is and
-is set by the single worst token; k=len is the mean, which a one-position injection
-disappears into. k>1 also stops one unlucky token from carrying the whole decision.
-
-Calibration is per (model, layer) because the clean relative residual grows with depth --
-scale-normalising by ||h|| does not remove that trend, so one threshold across layers is
-loose at the top and tight at the bottom.
-"""
 
 import argparse
 import json
 import math
 import statistics
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 from log import add_logging_args, get_logger
@@ -31,6 +13,9 @@ logger = get_logger(__name__)
 
 TOPK = 5
 SIGMA = 3.0
+SIGMA_ANY = 4.5
+MIN_RUN = 3
+STRIDE = 3
 IN_DISTRIBUTION = "natural_en"
 
 
@@ -52,26 +37,20 @@ def any_position_fires(steps: list[dict]) -> bool:
 
 
 @dataclass
-class Calibration:
+class LayerStat:
     n: int
-    k: int
-    sigma: float
     mean: float
     sd: float
-    threshold: float
 
-    def flags(self, score: float) -> bool:
-        return score > self.threshold
+    def threshold(self, sigma: float) -> float:
+        return self.mean + sigma * self.sd
 
 
-def calibrate(scores: list[float], k: int = TOPK, sigma: float = SIGMA) -> Calibration | None:
+def layer_stat(scores: list[float]) -> LayerStat | None:
     clean = [s for s in scores if not math.isnan(s)]
     if len(clean) < 2:
         return None
-    mean = statistics.fmean(clean)
-    sd = statistics.stdev(clean)
-    return Calibration(n=len(clean), k=k, sigma=sigma, mean=mean, sd=sd,
-                       threshold=mean + sigma * sd)
+    return LayerStat(len(clean), statistics.fmean(clean), statistics.stdev(clean))
 
 
 def load_trajectories(layers_dir: Path) -> list[dict]:
@@ -95,78 +74,138 @@ def score_rows(rows: list[dict], k: int) -> list[dict]:
             "layer": row["layer"],
             "n_steps": len(residuals),
             "score": topk_mean(residuals, k),
-            "max": max(residuals),
+            "residuals": residuals,
             "fires_any": any_position_fires(row["steps"]),
         })
     return out
 
 
-def _rate(hits: int, n: int) -> float:
-    return hits / n if n else float("nan")
+# ------------------------------------------------------------------ layer axis
 
-
-def evaluate(scored: list[dict], k: int, sigma: float, calibrate_on: str) -> dict:
-    """Calibrate per layer, then score every trajectory at that layer against it."""
+def build_profiles(scored: list[dict]) -> tuple[dict, dict, list[int]]:
+    """id -> {layer: score}, id -> category, and the model's layer list in order."""
+    profiles: dict[str, dict[int, float]] = {}
+    categories: dict[str, str] = {}
+    for s in scored:
+        profiles.setdefault(s["id"], {})[s["layer"]] = s["score"]
+        categories[s["id"]] = s["category"] or "?"
     layers = sorted({s["layer"] for s in scored})
-    per_layer, flagged_ids, all_ids = {}, set(), set()
-    by_category: dict[str, list[int]] = {}
-    n_flagged = n_total = n_any = 0
+    return profiles, categories, layers
 
-    for layer in layers:
+
+def layer_stats(scored: list[dict], calibrate_on: str) -> dict[int, LayerStat]:
+    stats = {}
+    for layer in sorted({s["layer"] for s in scored}):
         at = [s for s in scored if s["layer"] == layer]
         basis = [s for s in at if s["category"] == calibrate_on] if calibrate_on != "all" else at
-        cal = calibrate([s["score"] for s in basis], k, sigma)
-        if cal is None:
-            continue
-        hits = 0
-        for s in at:
-            fired = cal.flags(s["score"])
-            hits += fired
-            n_flagged += fired
-            n_any += s["fires_any"]
-            n_total += 1
-            all_ids.add(s["id"])
-            if fired:
-                flagged_ids.add(s["id"])
-            bucket = by_category.setdefault(s["category"] or "?", [0, 0, 0])
-            bucket[0] += fired
-            bucket[1] += 1
-            bucket[2] += s["fires_any"]
-        per_layer[layer] = {**asdict(cal), "n_at_layer": len(at), "flagged": hits,
-                            "fpr": _rate(hits, len(at))}
+        stat = layer_stat([s["score"] for s in basis])
+        if stat is not None:
+            stats[layer] = stat
+    return stats
 
+
+def longest_run(layers: list[int], fired: set[int]) -> int:
+    """Longest stretch of ADJACENT layers (adjacent in this model's layer list) that fired."""
+    best = run = 0
+    for layer in layers:
+        run = run + 1 if layer in fired else 0
+        best = max(best, run)
+    return best
+
+
+def scan(profile: dict[int, float], stats: dict[int, LayerStat], layers: list[int],
+         sigma: float, stride: int) -> tuple[set[int], int]:
+    """Coarse-to-fine layer scan. Returns (layers found firing, layers examined).
+
+    Looks at every stride-th layer, then walks outward from each hit while its
+    neighbours keep firing, which is what traces a run back to its injection point.
+    """
+    examined: set[int] = set()
+    fired: set[int] = set()
+    index = {layer: i for i, layer in enumerate(layers)}
+
+    def fires(layer: int) -> bool:
+        examined.add(layer)
+        stat = stats.get(layer)
+        score = profile.get(layer)
+        if stat is None or score is None or math.isnan(score):
+            return False
+        return score > stat.threshold(sigma)
+
+    frontier = [layer for layer in layers[::max(1, stride)] if fires(layer)]
+    fired.update(frontier)
+    while frontier:
+        i = index[frontier.pop()]
+        for j in (i - 1, i + 1):
+            if 0 <= j < len(layers) and layers[j] not in examined:
+                if fires(layers[j]):
+                    fired.add(layers[j])
+                    frontier.append(layers[j])
+    return fired, len(examined)
+
+
+def prompt_fpr(profiles: dict, stats: dict[int, LayerStat], layers: list[int], *,
+               sigma: float, min_run: int, stride: int,
+               sigma_any: float = float("inf")) -> dict:
+    """Per-PROMPT flag rate: the quantity worth tuning, since a prompt is the unit."""
+    flagged, examined_total, runs = 0, 0, []
+    per_id = {}
+    for pid, profile in profiles.items():
+        fired, examined = scan(profile, stats, layers, sigma, stride)
+        run = longest_run(layers, fired)
+        lone = any(layer in stats and not math.isnan(profile.get(layer, float("nan")))
+                   and profile[layer] > stats[layer].threshold(sigma_any)
+                   for layer in layers)
+        hit = (run >= min_run and run > 0) or lone
+        flagged += hit
+        examined_total += examined
+        runs.append(run)
+        per_id[pid] = {"longest_run": run, "n_fired": len(fired), "lone_layer": lone,
+                       "examined": examined, "flagged": hit}
+    n = len(profiles) or 1
     return {
-        "k": k,
-        "sigma": sigma,
-        "calibrated_on": calibrate_on,
-        "n_trajectory_layer_pairs": n_total,
-        "fpr_topk": _rate(n_flagged, n_total),
-        "fpr_any_position": _rate(n_any, n_total),
-        "fpr_topk_any_layer": _rate(len(flagged_ids), len(all_ids)),
-        "n_trajectories": len(all_ids),
-        "per_category": {
-            c: {"n": v[1], "fpr_topk": _rate(v[0], v[1]),
-                "fpr_any_position": _rate(v[2], v[1])}
-            for c, v in sorted(by_category.items())
-        },
-        "per_layer": per_layer,
+        "n_prompts": len(profiles),
+        "fpr_prompt": flagged / n,
+        "mean_longest_run": statistics.fmean(runs) if runs else float("nan"),
+        "max_longest_run": max(runs) if runs else 0,
+        "layers_examined_frac": examined_total / (n * len(layers)) if layers else float("nan"),
+        "per_id": per_id,
     }
 
 
-def min_detectable(residuals: list[float], threshold: float, k: int) -> tuple[float, float]:
-    """Smallest injection this rule would catch, in two regimes.
+def tune_sigma(profiles: dict, stats: dict[int, LayerStat], layers: list[int], *,
+               target: float, min_run: int, stride: int, sigma_any: float,
+               ratio: float, lo: float = 0.0, hi: float = 15.0, iters: int = 40) -> float:
+    """Smallest sigma whose per-PROMPT false-positive rate is at or under target.
 
-    Returns (one_position, all_positions):
-      one_position  -- the relative residual a SINGLE steered token must reach. The
-                       other positions keep their clean values and the injected one
-                       replaces the least suspicious of them.
-      all_positions -- the factor every position must be multiplied by, which is what
-                       steering at --positions all does.
-
-    Both are closed form: the top-k mean is linear in the values it averages. The pair
-    is the cost of k -- averaging k positions divides a one-token spike by k while
-    leaving an all-position steer untouched.
+    This is the whole point of tuning globally: applying a fixed per-layer sigma sets a
+    per-layer rate and lets the prompt-level rate fall where it may.
     """
+    for _ in range(iters):
+        mid = (lo + hi) / 2
+        got = prompt_fpr(profiles, stats, layers, sigma=mid, min_run=min_run,
+                         stride=stride, sigma_any=mid * ratio)["fpr_prompt"]
+        if got > target:
+            lo = mid
+        else:
+            hi = mid
+    return hi
+
+
+def run_distribution(profiles: dict, stats: dict[int, LayerStat], layers: list[int],
+                     sigma: float) -> dict[int, int]:
+    counts: dict[int, int] = {}
+    for profile in profiles.values():
+        fired, _ = scan(profile, stats, layers, sigma, 1)
+        run = longest_run(layers, fired)
+        counts[run] = counts.get(run, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+# ------------------------------------------------------------- position axis cost
+
+def min_detectable(residuals: list[float], threshold: float, k: int) -> tuple[float, float]:
+    """Smallest injection this rule would catch: (one position, all-position factor)."""
     if not residuals or threshold <= 0:
         return float("nan"), float("nan")
     ke = min(k, len(residuals))
@@ -176,29 +215,20 @@ def min_detectable(residuals: list[float], threshold: float, k: int) -> tuple[fl
     return one, threshold / clean if clean > 0 else float("nan")
 
 
-def sensitivity(scored: list[dict], rows: list[dict], k: int, sigma: float,
-                calibrate_on: str) -> dict:
-    by_key = {(r["layer"], r.get("id")): r for r in rows}
-    ones, mults, cleans = [], [], []
-    for layer in sorted({s["layer"] for s in scored}):
-        at = [s for s in scored if s["layer"] == layer]
-        basis = [s for s in at if s["category"] == calibrate_on] if calibrate_on != "all" else at
-        cal = calibrate([s["score"] for s in basis], k, sigma)
-        if cal is None:
+def sensitivity(scored: list[dict], stats: dict[int, LayerStat], k: int,
+                sigma: float) -> dict:
+    """What choosing k costs, as the smallest injection that still crosses the threshold."""
+    ones, mults = [], []
+    for row in scored:
+        stat = stats.get(row["layer"])
+        if stat is None:
             continue
-        for s in at:
-            row = by_key.get((layer, s["id"]))
-            if row is None:
-                continue
-            residuals = relative_residuals(row.get("steps", []))
-            one, mult = min_detectable(residuals, cal.threshold, k)
-            if not math.isnan(one):
-                ones.append(one)
-            if not math.isnan(mult):
-                mults.append(mult)
-            cleans.append(s["score"])
+        one, mult = min_detectable(row["residuals"], stat.threshold(sigma), k)
+        if not math.isnan(one):
+            ones.append(one)
+        if not math.isnan(mult):
+            mults.append(mult)
     return {
-        "median_clean_score": statistics.median(cleans) if cleans else float("nan"),
         "median_min_single_position": statistics.median(ones) if ones else float("nan"),
         "median_min_all_position_factor": statistics.median(mults) if mults else float("nan"),
     }
@@ -207,22 +237,37 @@ def sensitivity(scored: list[dict], rows: list[dict], k: int, sigma: float,
 def main():
     parser = argparse.ArgumentParser(
         description="Calibrate the per-trajectory detector on the clean SipIt inversions "
-                    "already on disk, and measure the false-positive rate it buys.")
+                    "already on disk, tuning to a per-prompt false-positive target.")
     parser.add_argument("--results_root", type=Path, default=Path("results"))
     parser.add_argument("--k", type=int, default=TOPK,
-                        help=f"positions averaged, largest first (default {TOPK}). "
-                             f"1 reproduces the max / 'any position fires' rule")
+                        help=f"positions averaged, largest first (default {TOPK})")
     parser.add_argument("--sigma", type=float, default=SIGMA,
-                        help=f"threshold is mean + sigma*sd of the clean statistic "
-                             f"(default {SIGMA})")
-    parser.add_argument("--calibrate_on", type=str, default=IN_DISTRIBUTION,
-                        help="category whose clean trajectories set mean and sd, or 'all'. "
-                             "Calibrating on one category and scoring the rest is the "
-                             "held-out number; 'all' is in-sample and optimistic")
+                        help=f"per-layer threshold is mean + sigma*sd (default {SIGMA}). "
+                             f"Ignored when --target_fpr is given")
+    parser.add_argument("--sigma_any", type=float, default=SIGMA_ANY,
+                        help=f"a single layer this far above clean flags on its own, no "
+                             f"run required (default {SIGMA_ANY}). Covers injections in "
+                             f"the last few layers, which cannot produce a run. --target_fpr "
+                             f"scales it with --sigma, keeping their ratio")
+    parser.add_argument("--target_fpr", type=float, default=None,
+                        help="tune sigma so the per-PROMPT false-positive rate lands here "
+                             "(e.g. 0.01). This is the rate to specify: a per-layer sigma "
+                             "compounds over depth into something much larger")
+    parser.add_argument("--min_run", type=int, default=MIN_RUN,
+                        help=f"adjacent firing layers required to flag a prompt (default "
+                             f"{MIN_RUN} = the old any-layer rule). An injection persists "
+                             f"downstream and runs long; isolated spikes are usually noise")
+    parser.add_argument("--stride", type=int, default=STRIDE,
+                        help=f"examine every m-th layer first, then walk outward from any "
+                             f"hit to trace its run (default {STRIDE} = every layer)")
+    parser.add_argument("--calibrate_on", type=str, default="all",
+                        help="category whose clean trajectories set mean and sd, or 'all' "
+                             "(default). Calibrating on natural_en alone repeats finding "
+                             "4's mistake: the in-distribution floor is the wrong target")
     parser.add_argument("--sensitivity", action="store_true",
-                        help="also report the smallest injection the rule would catch, "
-                             "for a single steered position and for an all-position "
-                             "steer. This is what choosing k costs")
+                        help="also report the smallest injection the rule would catch, for "
+                             "one steered position and for an all-position steer. This is "
+                             "what choosing k costs")
     parser.add_argument("--slug", type=str, default=None, help="one model directory only")
     parser.add_argument("--out_name", type=str, default="detector_calibration.json")
     parser.add_argument("--no_write", action="store_true")
@@ -236,54 +281,66 @@ def main():
     if not dirs:
         raise SystemExit(f"no */sipit/layers under {args.results_root}")
 
-    logger.info("rule: mean of the top %d relative residuals per trajectory, flagged above "
-                "mean + %g sd of the clean statistic, calibrated per layer on %r",
-                args.k, args.sigma, args.calibrate_on)
-    logger.info("%-32s %7s %8s %11s %13s %12s", "model", "trajs", "pairs",
-                "FPR top-k", "FPR any-pos", "FPR any-layer")
-    summary = {}
+    ratio = args.sigma_any / args.sigma if args.sigma else 1.5
+    logger.info("top-%d mean per trajectory; flag on >=%d adjacent firing layers or one "
+                "layer at %.2g sigma; stride %d; calibrated per layer on %r", args.k,
+                args.min_run, args.sigma_any, args.stride, args.calibrate_on)
+    if args.target_fpr is not None:
+        logger.info("tuning sigma per model to a per-prompt FPR of %.3g", args.target_fpr)
+    logger.info("%-32s %6s %7s %8s %11s %11s %9s %8s", "model", "layers", "prompts",
+                "sigma", "FPR/prompt", "FPR/layer", "mean run", "scanned")
+
     for layers_dir in dirs:
         slug = layers_dir.parts[-3]
-        rows = load_trajectories(layers_dir)
-        scored = score_rows(rows, args.k)
+        scored = score_rows(load_trajectories(layers_dir), args.k)
         if not scored:
             continue
-        report = evaluate(scored, args.k, args.sigma, args.calibrate_on)
+        profiles, categories, layers = build_profiles(scored)
+        stats = layer_stats(scored, args.calibrate_on)
+        if not stats:
+            continue
+
+        sigma = args.sigma
+        if args.target_fpr is not None:
+            sigma = tune_sigma(profiles, stats, layers, target=args.target_fpr,
+                               min_run=args.min_run, stride=args.stride,
+                               sigma_any=args.sigma_any, ratio=ratio)
+        report = prompt_fpr(profiles, stats, layers, sigma=sigma,
+                            min_run=args.min_run, stride=args.stride,
+                            sigma_any=sigma * ratio)
+        per_layer_hits = sum(1 for pid, p in profiles.items() for layer in layers
+                             if layer in stats and not math.isnan(p.get(layer, float("nan")))
+                             and p[layer] > stats[layer].threshold(sigma))
+        pairs = sum(1 for p in profiles.values() for layer in layers if layer in p)
+
+        logger.info("%-32s %6d %7d %8.2f %10.2f%% %10.2f%% %9.2f %7.0f%%", slug,
+                    len(layers), report["n_prompts"], sigma,
+                    100 * report["fpr_prompt"], 100 * per_layer_hits / max(1, pairs),
+                    report["mean_longest_run"], 100 * report["layers_examined_frac"])
+
         if args.sensitivity:
-            report["sensitivity"] = sensitivity(scored, rows, args.k, args.sigma,
-                                                args.calibrate_on)
-        summary[slug] = report
-        logger.info("%-32s %7d %8d %10.2f%% %12.2f%% %11.2f%%", slug,
-                    report["n_trajectories"], report["n_trajectory_layer_pairs"],
-                    100 * report["fpr_topk"], 100 * report["fpr_any_position"],
-                    100 * report["fpr_topk_any_layer"])
+            sens = sensitivity(scored, stats, args.k, sigma)
+            logger.info("%-32s   one position needs %.2e, all positions %.1fx clean", "",
+                        sens["median_min_single_position"],
+                        sens["median_min_all_position_factor"])
+
         if not args.no_write:
-            out = layers_dir.parent / args.out_name
-            out.write_text(json.dumps(report, indent=2) + "\n")
+            payload = {
+                "k": args.k, "sigma": sigma, "sigma_any": sigma * ratio,
+                "min_run": args.min_run,
+                "stride": args.stride, "calibrated_on": args.calibrate_on,
+                "target_fpr": args.target_fpr,
+                "fpr_prompt": report["fpr_prompt"],
+                "fpr_layer": per_layer_hits / max(1, pairs),
+                "n_prompts": report["n_prompts"],
+                "layers_examined_frac": report["layers_examined_frac"],
+                "run_length_histogram": run_distribution(profiles, stats, layers, sigma),
+                "per_layer": {str(layer): {"n": s.n, "mean": s.mean, "sd": s.sd,
+                                           "threshold": s.threshold(sigma)}
+                              for layer, s in stats.items()},
+            }
+            (layers_dir.parent / args.out_name).write_text(json.dumps(payload, indent=2) + "\n")
 
-    if args.sensitivity:
-        logger.info("")
-        logger.info("smallest injection caught (median over trajectories)")
-        logger.info("%-32s %14s %16s %14s", "model", "clean score",
-                    "1 position needs", "all-pos factor")
-        for slug, report in summary.items():
-            s = report["sensitivity"]
-            logger.info("%-32s %14.2e %16.2e %13.1fx", slug, s["median_clean_score"],
-                        s["median_min_single_position"],
-                        s["median_min_all_position_factor"])
-
-    logger.info("")
-    logger.info("by category, pooled over models (trajectory-layer pairs)")
-    logger.info("%-14s %8s %11s %13s", "category", "n", "FPR top-k", "FPR any-pos")
-    pooled: dict[str, list[float]] = {}
-    for report in summary.values():
-        for cat, v in report["per_category"].items():
-            acc = pooled.setdefault(cat, [0, 0, 0])
-            acc[0] += v["fpr_topk"] * v["n"]
-            acc[1] += v["n"]
-            acc[2] += v["fpr_any_position"] * v["n"]
-    for cat, (hits, n, any_hits) in sorted(pooled.items(), key=lambda kv: -kv[1][0] / max(1, kv[1][1])):
-        logger.info("%-14s %8d %10.2f%% %12.2f%%", cat, n, 100 * hits / n, 100 * any_hits / n)
     if not args.no_write:
         logger.info("wrote %s per model", args.out_name)
 
