@@ -384,7 +384,15 @@ def main():
                              f"wanted (default: {scoring.STRONGREJECT_THRESHOLD})")
     parser.add_argument("--validate_judge", action="store_true",
                         help="score the judge against the 300 human-labelled "
-                             "JailbreakBench rows before using it, and record the result")
+                             "JailbreakBench rows before using it, and record the result. "
+                             "Cached per (judge, threshold) under results/_judge/validation/ "
+                             "and reused: the scorecard is a property of the judge, not of "
+                             "the model under test, so a sweep pays its 300 calls a grader "
+                             "once rather than once per model")
+    parser.add_argument("--revalidate_judge", action="store_true",
+                        help="recompute the cached scorecard instead of reusing it. Needed "
+                             "only when the judge model's weights or the row set changed "
+                             "under a name that did not")
 
     parser.add_argument("--out_dir", type=Path, default=None,
                         help="default: results/<slug>/behavior/<name>/<arm>/ "
@@ -427,7 +435,8 @@ def main():
     if args.validate_judge and judges:
         judge_report = {}
         for judge in judges:
-            judge_report.update(scoring.validate(judge))
+            judge_report.update(
+                scoring.validate_cached(judge, refresh=args.revalidate_judge))
         scoring.log_validation(judge_report)
 
     model, _ = load_model(args.model_name, dtype=DTYPES[args.dtype], device=args.device)

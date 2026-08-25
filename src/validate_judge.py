@@ -59,6 +59,14 @@ def main():
     report = scoring.validate(judge, rows)
     scoring.log_validation(report)
 
+    # Populate the shared cache so a sweep reuses this run rather than paying again --
+    # but only from a full, unswept scoring, since a --limit smoke test or a threshold
+    # picked by --sweep_threshold is not the scorecard the sweep should inherit.
+    if not args.limit and not args.sweep_threshold and args.rows == scoring.JUDGE_COMPARISON_PATH:
+        scoring.write_validation(judge, report)
+    else:
+        logger.info("not caching this scorecard: it is a partial or swept run")
+
     mine = report[judge.name]
     references = sorted(m["agreement"] for name, m in report.items()
                         if name.startswith("reference:"))
