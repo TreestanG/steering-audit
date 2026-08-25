@@ -46,12 +46,24 @@ def vocab_table_path(model_name: str, root: str | Path = ACTIVATIONS_ROOT) -> Pa
     return activations_dir(model_name, root) / "vocab" / "vocab_table.pt"
 
 
-def behavior_dir(model_name: str, behavior: str) -> Path:
+def behavior_dir(model_name: str, behavior: str, arm: str | None = None) -> Path:
+    """Where one (behavior, arm) run's records live.
+
+    The arm is part of the path because it is part of the experiment: jbb_refusal's
+    benign arm is the false-positive control for its harmful arm, and refusal has two.
+    Without it the second arm overwrites the first and the driver's sentinel skips the
+    stage outright, so a sweep silently reports one arm's numbers under both names.
+    Sentiment keeps its flat legacy path -- one arm, and committed figures point at it.
+    """
     if behavior == "sentiment":
         return results_dir(model_name) / "sentiment"
-    return results_dir(model_name) / "behavior" / behavior
+    base = results_dir(model_name) / "behavior" / behavior
+    return base / arm if arm else base
 
 
-def steer_dir(model_name: str, behavior: str = "sentiment") -> Path:
+def steer_dir(model_name: str, behavior: str = "sentiment",
+              arm: str | None = None) -> Path:
     base = results_dir(model_name) / "steer"
-    return base if behavior == "sentiment" else base / behavior
+    if behavior == "sentiment":
+        return base
+    return base / behavior / arm if arm else base / behavior

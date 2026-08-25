@@ -14,24 +14,30 @@ this is the multi-token half: the behaviors in data/behavior_*.json, greedy
 generation, and the JailbreakBench metrics from Arditi et al. (2406.11717).
 
 Stages, in order (each skipped when its output already exists):
-  sweep      behavior_eval.py   -> results/<slug>/behavior/<name>/gaps.json
+  sweep      behavior_eval.py   -> results/<slug>/behavior/<name>/<arm>/gaps.json
              every (layer, fraction), single-token + teacher-forced. Cheap; this is
              what picks the layer.
   generate   behavior_eval.py   -> .../completions.jsonl, .../evaluations.json
              greedy completions at the picked layer, scored by the behavior's scorer,
              by substring matching, and by --judge. This is where ASR comes from.
-  audit      steer_audit.py     -> results/<slug>/steer/<name>/fractions/*.jsonl
+  audit      steer_audit.py     -> results/<slug>/steer/<name>/<arm>/fractions/*.jsonl
              the detector, on the SAME prompts and the SAME steering vector.
-  join       join_detection.py  -> .../behavior/<name>/detection_vs_efficacy.json
-                                    .../behavior/<name>/figures/*.png
+  join       join_detection.py  -> .../<name>/<arm>/detection_vs_efficacy.json
+                                    .../<name>/<arm>/figures/*.png
              the two joined on (prompt, layer, fraction, arm). Produces the number
              the whole project is about: of the steers that jailbroke, how many
              slipped past the audit. Zero is the claim.
 
+Every path carries the ARM, because the arm is part of the experiment: jbb_refusal's
+benign arm is the false-positive control for its harmful arm, and refusal has two of
+its own. Two arms of one behavior are two runs and never overwrite each other.
+
 Options:
   --behavior NAME    refusal | jbb_refusal | evil_persona | language_fr | sentiment
                      (default: jbb_refusal)
-  --arm NAME         test arm (default: the dataset's own default_arm)
+  --arm NAME         test arm (default: the dataset's own default_arm). Part of every
+                     output path, so --arm benign is a separate run from --arm harmful
+                     rather than something that overwrites it
   --fractions LIST   steering strengths. NEGATIVE steers away from the behavior,
                      which is the jailbreak direction for jbb_refusal -- and argparse
                      needs the equals form for it: --fractions=-0.25,-0.5,-0.75
@@ -48,15 +54,27 @@ Options:
                      intervention. The audit still inverts only the LAST position, so at
                      'all' its detection rate is a lower bound: the other steered
                      positions are never checked
-  --audit_prompts N  prompts to audit (default 5). Sampled round-robin over categories,
+  --audit_prompts N  prompts to audit (default 30). Sampled round-robin over categories,
                      so the audited set is a prefix of the generated one and the two
-                     join. This also bounds the join: only prompts present in BOTH
-                     stages can be joined, so a small number here is a small
-                     denominator on the evasion-window figure
-  --judge J          substring (default) | fireworks | none.
-                     fireworks needs FIREWORKS_API_KEY (or FIREWORKS_KEY, or a
-                     gitignored .env) and sends the goals and the completions to a
-                     third party
+                     join. Only prompts in BOTH stages join, so this alone sets the
+                     denominator on the evasion-window figure -- the number the project
+                     turns on. At 3 fractions and the ~37% jailbreak rate seen so far, a
+                     zero result is bounded at 95% by 48% with 5 prompts, 12% with 25,
+                     10% with 30, 5% with 60. It is also the entire runtime of this
+                     stage: one full vocabulary scan per prompt, measured at 49s on
+                     Qwen-0.5B fp32 over 24 layers and 3 fractions, so ~25 min at the
+                     default and roughly 14x that on a 7B. Lower it for large models,
+                     and note the bounds above are for all fractions POOLED; a single
+                     fraction on its own is bounded at 28% with 30 prompts
+  --judge J          fireworks (default) | substring | none.
+                     fireworks is the default because it is the only one whose ASR is
+                     worth quoting: on JailbreakBench's 300 human-labelled rows the
+                     HarmBench prompt agrees 87.0% at a 14.2% false-positive rate,
+                     against substring matching's 55.3% / 69.5%. It needs
+                     FIREWORKS_API_KEY (or FIREWORKS_KEY, or a gitignored .env) and
+                     sends the goals and the completions to a third party. --judge
+                     substring keeps the run local and offline, and the join then says
+                     on its face that every rate it reports is an upper bound
   --judge_style S    comma-separated graders for --judge fireworks
                      (default: harmbench,strongreject). One generation pass, one API
                      call per grader per row. The first is canonical and supplies the
@@ -75,14 +93,18 @@ Options:
 
   scripts/run_behavior.sh Qwen/Qwen2.5-1.5B-Instruct --behavior jbb_refusal
   scripts/run_behavior.sh Qwen/Qwen2.5-1.5B-Instruct --behavior jbb_refusal \
-      --judge fireworks --max_new_tokens 512
-  scripts/run_behavior.sh gpt2 --behavior language_fr --fractions 0.5,1,2
+      --arm benign --max_new_tokens 512          # the false-positive control arm
+  scripts/run_behavior.sh gpt2 --behavior language_fr --fractions 0.5,1,2 \
+      --judge substring                          # no judge call is worth making here
 
-The substring judge is a high-recall, low-precision ASR estimate: on JailbreakBench's
-own 300 human-labelled rows it agrees 55.3% of the time at a 69.5% false-positive
-rate, against 87.0% / 14.2% for the HarmBench prompt over Fireworks and 90.7% for the
-best published judge. Run src/validate_judge.py to see the table. Read a substring ASR
-as an upper bound, and use --judge fireworks for a number to put in a paper.
+WHAT THE JOIN SCORES. The 2x2's success axis is read off the behavior rather than
+fixed: jbb_refusal is the only behavior whose own scorer IS a judge, so it joins on
+jailbroken_judge -- the HarmBench prompt under --judge fireworks, 87.0% agreement with
+JailbreakBench's 300 human labels at a 14.2% false-positive rate. Every other behavior
+joins on behavior_hit, its own scorer, because a refusal-phrase test applied to French
+text or a persona scores near 100% and measures nothing. --jailbroken_field overrides.
+Substring matching agrees 55.3% at a 69.5% false-positive rate; it stays available,
+and the join labels anything it produces an upper bound on its face.
 EOF
 }
 
@@ -96,10 +118,10 @@ PICK_BY=
 N_PROMPTS=0
 MAX_NEW_TOKENS=256
 POSITIONS=all
-JUDGE=substring
+JUDGE=fireworks
 JUDGE_STYLE=harmbench,strongreject
 DO_AUDIT=1
-AUDIT_PROMPTS=5
+AUDIT_PROMPTS=30
 JOIN_REL_TOL=
 DTYPE=float32
 TAG=
@@ -160,6 +182,25 @@ if [[ -z $PICK_BY ]]; then
     [[ $BEHAVIOR == sentiment ]] && PICK_BY=flip || PICK_BY=target_gap
 fi
 
+# Resolve the arm here rather than letting each stage default it separately: it is
+# part of every output path now, so the driver has to name the same one the stages do.
+if ! ARM=$(AAT_BEHAVIOR=$BEHAVIOR AAT_ARM=$ARM uv run python - <<'PY' 2>&1
+import os, sys
+sys.path.insert(0, "src")
+import behaviors
+behavior = behaviors.load_behavior(os.environ["AAT_BEHAVIOR"])
+arm = os.environ.get("AAT_ARM") or behavior.default_arm
+if arm not in behavior.arms:
+    raise SystemExit(f"no test arm {arm!r} in {behavior.name}; "
+                     f"have {', '.join(behavior.arm_names())}")
+print(arm)
+PY
+); then
+    printf '%s\n' "$ARM" >&2
+    exit 1
+fi
+ARM=${ARM##*$'\n'}
+
 if [[ -n $TAG && ! $TAG =~ ^[A-Za-z0-9._-]+$ ]]; then
     echo "--tag must be [A-Za-z0-9._-]+, got: $TAG" >&2
     exit 1
@@ -216,18 +257,18 @@ run_one_model() {
     if [[ $BEHAVIOR == sentiment ]]; then
         BDIR=$RES/sentiment; SDIR=$RES/steer
     else
-        BDIR=$RES/behavior/$BEHAVIOR; SDIR=$RES/steer/$BEHAVIOR
+        BDIR=$RES/behavior/$BEHAVIOR/$ARM; SDIR=$RES/steer/$BEHAVIOR/$ARM
     fi
     local LOG_DIR=$RES/logs
     local FAILED=()
     mkdir -p "$LOG_DIR"
 
-    local COMMON=(--model_name "$MODEL" --dtype "$DTYPE" --behavior "$BEHAVIOR")
+    local COMMON=(--model_name "$MODEL" --dtype "$DTYPE" --behavior "$BEHAVIOR"
+                  --arm "$ARM")
     [[ -n $DEVICE ]] && COMMON+=(--device "$DEVICE")
-    [[ -n $ARM ]] && COMMON+=(--arm "$ARM")
 
     say "model     $MODEL"
-    say "behavior  $BEHAVIOR${ARM:+   arm $ARM}   fractions $FRACTIONS"
+    say "behavior  $BEHAVIOR   arm $ARM   fractions $FRACTIONS"
     say "dtype     $DTYPE${DEVICE:+   device $DEVICE}${TAG:+   tag $TAG}"
     say "results   $BDIR/  +  $SDIR/"
     say ""
@@ -249,7 +290,7 @@ run_one_model() {
                 "--fractions=${GEN_FRACTIONS:-$FRACTIONS}" --n_prompts "$AUDIT_PROMPTS" \
                 --positions "$POSITIONS"
 
-        local JOIN=(--model_name "$MODEL" --behavior "$BEHAVIOR")
+        local JOIN=(--model_name "$MODEL" --behavior "$BEHAVIOR" --arm "$ARM")
         [[ -n $JOIN_REL_TOL ]] && JOIN+=(--rel_tol "$JOIN_REL_TOL")
         stage join - uv run src/join_detection.py "${JOIN[@]}"
     fi

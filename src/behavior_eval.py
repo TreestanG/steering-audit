@@ -385,8 +385,10 @@ def main():
                              "JailbreakBench rows before using it, and record the result")
 
     parser.add_argument("--out_dir", type=Path, default=None,
-                        help="default: results/<slug>/behavior/<name>/ "
-                             "(results/<slug>/sentiment/ for the sentiment behavior)")
+                        help="default: results/<slug>/behavior/<name>/<arm>/ "
+                             "(results/<slug>/sentiment/ for the sentiment behavior). The "
+                             "arm is in the path so a second arm does not overwrite the "
+                             "first -- they are different experiments")
     add_model_args(parser, default_dtype="float32")
     add_logging_args(parser)
     args = parser.parse_args()
@@ -394,7 +396,7 @@ def main():
 
     behavior = load_behavior(args.behavior)
     arm = args.arm or behavior.default_arm
-    out_dir = args.out_dir or behavior_dir(args.model_name, behavior.name)
+    out_dir = args.out_dir or behavior_dir(args.model_name, behavior.name, arm)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     fractions = _csv_floats(args.fractions, "--fractions")

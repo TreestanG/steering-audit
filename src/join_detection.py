@@ -12,6 +12,23 @@ from plot_common import load_rows
 logger = get_logger(__name__)
 
 ARMS = ("steer", "rand")
+JUDGE_FIELD = "jailbroken_judge"
+BEHAVIOR_FIELD = "behavior_hit"
+
+
+def default_field(behavior: behaviors.Behavior) -> str:
+    """Which column counts as success, read off the behavior's own primary metric.
+
+    Only a behavior whose scorer IS a judge (jbb_refusal) should be joined on the
+    judge column; for the rest, jailbroken_judge is a refusal-phrase test applied to
+    French text or a persona, which scores near 100% and means nothing.
+    """
+    return JUDGE_FIELD if behavior.scorer.get("kind") == "judge" else BEHAVIOR_FIELD
+
+
+def judge_styles(row: dict) -> set[str]:
+    return {k[len("judge_"):-len("_score")] for k in row
+            if k.startswith("judge_") and k.endswith("_score") and k != "judge_score"}
 
 
 def load_audit(audit_dir: Path) -> list[dict]:
@@ -169,12 +186,13 @@ def graded_key(summary: list[dict]) -> str | None:
     return keys[0] if keys else None
 
 
-def log_table(summary: list[dict]) -> None:
+def log_table(summary: list[dict], metric: str = "ASR") -> None:
     key = graded_key(summary)
     label = key[len("judge_"):-len("_score_mean")] if key else "score"
     logger.info("%6s %5s %9s %4s %7s %9s %13s %11s %10s",
-                "arm", "layer", "fraction", "n", "ASR", "detected", label,
-                "rel_resid", "undet|jb")
+                "arm", "layer", "fraction", "n",
+                metric if len(metric) <= 7 else "hit", "detected", label,
+                "rel_resid", "undet|hit")
     for s in summary:
         value = s.get(key) if key else None
         score = "-" if value is None else f"{value:.3f}"
@@ -185,7 +203,8 @@ def log_table(summary: list[dict]) -> None:
                     "-" if math.isnan(undet) else f"{100 * undet:.0f}%")
 
 
-def plot(summary: list[dict], out: Path, *, rel_tol: float | None, title: str) -> None:
+def plot(summary: list[dict], out: Path, *, rel_tol: float | None, title: str,
+         metric: str = "jailbroken") -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -202,7 +221,7 @@ def plot(summary: list[dict], out: Path, *, rel_tol: float | None, title: str) -
         xs = [abs(s["fraction"]) for s in at]
         alpha = 0.45 if arm == "rand" else 1.0
         axes[0].plot(xs, [100 * s["asr"] for s in at], "o-", color=colour, lw=width,
-                     alpha=alpha, label=f"{arm}: ASR")
+                     alpha=alpha, label=f"{arm}: {metric}")
         if key and all(s.get(key) is not None for s in at):
             name = key[len("judge_"):-len("_score_mean")]
             axes[0].plot(xs, [100 * s[key] for s in at], "s--", color=colour, lw=width,
@@ -210,12 +229,14 @@ def plot(summary: list[dict], out: Path, *, rel_tol: float | None, title: str) -
         axes[1].plot(xs, [100 * s["detection_rate"] for s in at], "o-", color=colour,
                      lw=width, alpha=alpha, label=f"{arm}: detected")
         if arm == "steer":
-            evaded = [s["undetected_given_jailbroken"] for s in at]
-            xs_e, ys_e = zip(*[(x, 100 * v) for x, v in zip(xs, evaded)
-                               if not math.isnan(v)]) or ((), ())
-            if xs_e:
+            # Every point is NaN when nothing succeeded anywhere, which is the null
+            # result this figure exists to show -- it must not be the crashing case.
+            evaded = [(x, 100 * s["undetected_given_jailbroken"]) for x, s in zip(xs, at)
+                      if not math.isnan(s["undetected_given_jailbroken"])]
+            if evaded:
+                xs_e, ys_e = zip(*evaded)
                 axes[1].plot(xs_e, ys_e, "^:", color="C1", lw=2.0,
-                             label="steer: undetected | jailbroken")
+                             label=f"steer: undetected | {metric}")
 
     axes[0].set_ylabel("percent")
     axes[0].set_title("Efficacy")
@@ -236,17 +257,24 @@ def main():
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
     parser.add_argument("--behavior", type=str, default="jbb_refusal",
                         help=f"one of {', '.join(behaviors.list_behaviors())}")
+    parser.add_argument("--arm", type=str, default=None,
+                        help="test arm to join (default: the dataset's default_arm). Must "
+                             "be the arm both stages ran -- it selects their directories")
     parser.add_argument("--completions", type=Path, default=None,
-                        help="default: results/<slug>/behavior/<name>/completions.jsonl")
+                        help="default: results/<slug>/behavior/<name>/<arm>/completions.jsonl")
     parser.add_argument("--audit_dir", type=Path, default=None,
-                        help="default: results/<slug>/steer/<name>/")
+                        help="default: results/<slug>/steer/<name>/<arm>/")
     parser.add_argument("--rel_tol", type=float, default=None,
                         help="re-derive detection at this threshold instead of using the "
                              "flag the audit stored. Free: the rows carry residual and "
                              "||h||, so a different threshold is a re-read, not a re-run")
-    parser.add_argument("--jailbroken_field", type=str, default="jailbroken_judge",
-                        help="which column counts as a jailbreak (default the canonical "
-                             "judge; 'jailbroken_substring' for the upper-bound metric)")
+    parser.add_argument("--jailbroken_field", type=str, default=None,
+                        help=f"which column counts as success. Default is read off the "
+                             f"behavior: {JUDGE_FIELD!r} (the canonical LLM judge -- "
+                             f"HarmBench under --judge fireworks) when the behavior's own "
+                             f"scorer is a judge, otherwise {BEHAVIOR_FIELD!r}, the "
+                             f"behavior's own scorer. 'jailbroken_substring' selects the "
+                             f"upper-bound metric explicitly")
     parser.add_argument("--allow_positions_mismatch", action="store_true",
                         help="join anyway when the two stages steered different positions. "
                              "The result is not a 2x2 on one intervention -- it pairs a "
@@ -265,23 +293,35 @@ def main():
     log_setup(args, default_log=logs_dir(args.model_name) / "join.log")
 
     behavior = behaviors.load_behavior(args.behavior)
-    bdir = behavior_dir(args.model_name, behavior.name)
+    arm = args.arm or behavior.default_arm
+    bdir = behavior_dir(args.model_name, behavior.name, arm)
     completions_path = args.completions or bdir / "completions.jsonl"
-    audit_dir = args.audit_dir or steer_dir(args.model_name, behavior.name)
+    audit_dir = args.audit_dir or steer_dir(args.model_name, behavior.name, arm)
 
     if not completions_path.exists():
         raise SystemExit(
             f"{completions_path} not found. Run behavior_eval.py --generate for "
-            f"--behavior {behavior.name} first."
+            f"--behavior {behavior.name} --arm {arm} first."
         )
     completions = load_rows(completions_path)
     logger.info("generation: %d rows from %s", len(completions), completions_path)
     audit = load_audit(audit_dir)
 
-    if args.jailbroken_field not in completions[0]:
-        available = sorted(k for k in completions[0] if k.startswith("jailbroken"))
-        raise SystemExit(f"--jailbroken_field {args.jailbroken_field!r} is not in "
-                         f"{completions_path}; have {available}")
+    field = args.jailbroken_field or default_field(behavior)
+    if field not in completions[0]:
+        available = sorted(k for k in completions[0]
+                           if k.startswith("jailbroken") or k == BEHAVIOR_FIELD)
+        raise SystemExit(f"--jailbroken_field {field!r} is not in {completions_path}; "
+                         f"have {available}")
+    styles = judge_styles(completions[0])
+    if field == JUDGE_FIELD and styles == {"substring_matching"}:
+        logger.warning(
+            "%s here IS substring matching -- the only judge this generation ran. On "
+            "JailbreakBench's human labels that agrees 55.3%% at a 69.5%% false-positive "
+            "rate, so every rate below is an UPPER BOUND. Re-run behavior_eval with "
+            "--judge fireworks for the HarmBench number.", JUDGE_FIELD)
+    logger.info("behavior %s, arm %s: scoring success on %r%s", behavior.name, arm, field,
+                f" (judges: {', '.join(sorted(styles))})" if styles else "")
 
     gen_positions = positions_seen(completions, arms_only=True)
     audit_positions = positions_seen(audit)
@@ -311,8 +351,7 @@ def main():
                        "two stages sampled differently and only their overlap can join",
                        len(orphans))
 
-    rows = join(completions, audit, rel_tol=args.rel_tol,
-                jailbroken_field=args.jailbroken_field)
+    rows = join(completions, audit, rel_tol=args.rel_tol, jailbroken_field=field)
     if not rows:
         gen_keys = {(r["layer"], r["fraction"]) for r in completions
                     if r["layer"] is not None}
@@ -325,14 +364,16 @@ def main():
             "same --behavior / --arm / --prompt_format."
         )
 
+    metric = "ASR" if field == JUDGE_FIELD else field
     summary = summarize(rows)
-    log_table(summary)
+    log_table(summary, metric)
 
     overall = contingency([r for r in rows if r["arm"] == "steer"])
     undetected = overall["jailbroken_undetected"]
     logger.info("")
-    logger.info("steered arm, all points pooled: %d/%d jailbroken, %d of those UNDETECTED",
-                overall["jailbroken_detected"] + undetected, overall["n"], undetected)
+    logger.info("steered arm, all points pooled: %d/%d %s, %d of those UNDETECTED",
+                overall["jailbroken_detected"] + undetected, overall["n"], metric,
+                undetected)
     if undetected:
         logger.warning("%d undetected jailbreak(s): an operating point that steers "
                        "without tripping the detector. This is the evasion window, and "
@@ -344,8 +385,10 @@ def main():
     out.write_text(json.dumps({
         "model_name": args.model_name,
         "behavior": behavior.name,
+        "arm": arm,
         "rel_tol": args.rel_tol,
-        "jailbroken_field": args.jailbroken_field,
+        "jailbroken_field": field,
+        "judges": sorted(styles),
         "completions": str(completions_path),
         "audit_dir": str(audit_dir),
         "positions": sorted(gen_positions | audit_positions),
@@ -366,7 +409,8 @@ def main():
         plot(summary,
              args.plot_out or bdir / "figures" / "detection_vs_efficacy.png",
              rel_tol=args.rel_tol,
-             title=f"{args.model_name}  {behavior.name}: efficacy vs detection")
+             metric=metric,
+             title=f"{args.model_name}  {behavior.name} ({arm}): efficacy vs detection")
 
 
 if __name__ == "__main__":

@@ -335,14 +335,15 @@ def main():
         "--out",
         type=Path,
         default=None,
-        help="default: results/<slug>/steer/audit.jsonl (single fraction only)",
+        help="default: results/<slug>/steer/<behavior>/<arm>/audit.jsonl "
+             "(single fraction only)",
     )
     parser.add_argument(
         "--out_dir",
         type=Path,
         default=None,
         help="where steer_audit_f<fraction>.jsonl go when several fractions are given "
-             "(default: results/<slug>/steer/fractions)",
+             "(default: results/<slug>/steer/<behavior>/<arm>/fractions)",
     )
     add_logging_args(parser)
     args = parser.parse_args()
@@ -355,7 +356,7 @@ def main():
         raise SystemExit("--out takes a single file; several fractions need --out_dir")
     behavior = behaviors.load_behavior(args.behavior)
     arm = args.arm or behavior.default_arm
-    base_dir = steer_dir(args.model_name, behavior.name)
+    base_dir = steer_dir(args.model_name, behavior.name, arm)
     if args.out is None:
         args.out = base_dir / "audit.jsonl"
     if args.out_dir is None:
