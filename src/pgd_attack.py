@@ -707,7 +707,8 @@ def main():
     _warn_if_not_fp32()
     model, _ = require_model()
 
-    gaps_path = args.gaps or behavior_dir(args.model_name, behavior.name) / "gaps.json"
+    gaps_path = args.gaps or behavior_dir(args.model_name, behavior.name,
+                                          arm_name) / "gaps.json"
     pick_by = args.pick_by or ("flip" if behavior.name == "sentiment" else "target_gap")
     layer = (args.layer if args.layer is not None
              else best_steering_layer(gaps_path, args.fraction, args.allow_final_layer,
