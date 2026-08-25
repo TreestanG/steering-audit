@@ -22,5 +22,6 @@ results/**
 !results/**/
 !results/**/figures/*.png
 !results/*/sentiment/gaps.json
-!results/*/behavior/*/gaps.json
-!results/*/behavior/*/evaluations.json
+!results/*/behavior/*/*/gaps.json
+!results/*/behavior/*/*/evaluations.json
+!results/*/behavior/*/*/detection_vs_efficacy.json
