@@ -19,7 +19,7 @@ from steering import (
 )
 from log import add_logging_args, get_logger
 from log import setup as log_setup
-from paths import logs_dir, steer_dir
+from paths import atomic_writes, logs_dir, steer_dir
 from utils import (
     DTYPES,
     add_model_args,
@@ -390,15 +390,12 @@ def main():
     single = len(fractions) == 1
     paths = ({fractions[0]: args.out} if single
              else {f: args.out_dir / f"steer_audit_f{f:g}.jsonl" for f in fractions})
-    for path in paths.values():
-        path.parent.mkdir(parents=True, exist_ok=True)
     logger.info("%d prompts x %d layers x %d fraction(s) %s, one vocab scan each",
                 len(prompts), len(layers), len(fractions),
                 ",".join(f"{f:g}" for f in fractions))
 
     rows: dict[float, list[dict]] = {f: [] for f in fractions}
-    handles = {f: path.open("w") for f, path in paths.items()}
-    try:
+    with atomic_writes(paths) as handles:
         for i, prompt in enumerate(prompts, start=1):
             start = time.time()
             got = audit_prompt(
@@ -418,9 +415,6 @@ def main():
                 handles[fraction].flush()
                 rows[fraction].extend(fraction_rows)
             logger.info("  [%d/%d] %r in %.1fs", i, len(prompts), prompt, time.time() - start)
-    finally:
-        for handle in handles.values():
-            handle.close()
 
     for fraction in fractions:
         if not single:

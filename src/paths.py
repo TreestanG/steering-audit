@@ -1,8 +1,51 @@
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from typing import IO, TypeVar
+
+from log import get_logger
+
+logger = get_logger(__name__)
 
 RESULTS_ROOT = Path("results")
 ACTIVATIONS_ROOT = Path("data/activations")
+PARTIAL_SUFFIX = ".partial"
+
+K = TypeVar("K")
+
+
+@contextmanager
+def atomic_writes(paths: dict[K, Path]) -> Iterator[dict[K, IO[str]]]:
+    """Stream rows to <path>.partial, renaming into place only if the body completes.
+
+    A stage that writes its output as it goes is otherwise indistinguishable, once it
+    has been killed, from one that finished: the file exists and non-empty, the
+    driver's sentinel matches it, and the next run skips the stage. Everything
+    downstream then reads a truncated sample believing it is the whole one, which for
+    the audit means the evasion-window denominator silently shrinks.
+
+    The .partial is left behind rather than deleted -- it is hours of vocabulary scans
+    on a large model, and worth looking at before the rerun overwrites it.
+    """
+    temps = {key: path.with_name(path.name + PARTIAL_SUFFIX) for key, path in paths.items()}
+    for temp in temps.values():
+        temp.parent.mkdir(parents=True, exist_ok=True)
+    handles: dict[K, IO[str]] = {key: temp.open("w") for key, temp in temps.items()}
+    try:
+        yield handles
+    except BaseException:
+        for handle in handles.values():
+            handle.close()
+        logger.error("interrupted with output incomplete; left %s and did NOT write %s, "
+                     "so the next run redoes this stage rather than reading a partial one",
+                     ", ".join(str(t) for t in temps.values()),
+                     ", ".join(str(p) for p in paths.values()))
+        raise
+    for handle in handles.values():
+        handle.close()
+    for key, path in paths.items():
+        temps[key].replace(path)
 
 
 DTYPE_TAGS = {"float32": "fp32", "float16": "fp16", "bfloat16": "bf16"}

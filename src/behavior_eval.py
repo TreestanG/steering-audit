@@ -17,7 +17,7 @@ from generate import (
 )
 from log import add_logging_args, get_logger
 from log import setup as log_setup
-from paths import behavior_dir, logs_dir
+from paths import atomic_writes, behavior_dir, logs_dir
 from scoring import score_completion
 from steering import (
     PICK_BY,
@@ -229,7 +229,9 @@ def run_generation(behavior: Behavior, items: list[Item], prompts: list[str],
 
     completions_path = out_dir / "completions.jsonl"
     summaries: list[dict] = []
-    with completions_path.open("w") as handle:
+    with atomic_writes({"completions": completions_path}) as handles:
+        handle = handles["completions"]
+
         def record(arm: str, layer, fraction, intervention, replicate: int = 0):
             texts = generate_completions(
                 prompts, intervention, max_new_tokens=max_new_tokens,
