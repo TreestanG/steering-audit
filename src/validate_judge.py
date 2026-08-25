@@ -27,6 +27,17 @@ def main():
                              "cut-point. The score is the metric; this is only for the "
                              "comparison against judges that answer 0 or 1")
     parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--reasoning_effort", type=str, default="auto",
+                        help="low | medium | high | xhigh | max | none | adaptive, or "
+                             "'auto' (default) for scoring.JUDGE_REASONING's per-style "
+                             "choice. Reasoning is billed as output tokens and output is "
+                             "the ceiling that binds, so this is the knob that trades "
+                             "agreement against generated TPM -- measure both before "
+                             "picking one")
+    parser.add_argument("--max_tokens", type=int, default=None,
+                        help="default: scoring.JUDGE_MAX_TOKENS for the style. Passing a "
+                             "number here overrides the per-style cap, so leave it unset "
+                             "unless you are deliberately measuring truncation")
     parser.add_argument("--rows", type=Path, default=scoring.JUDGE_COMPARISON_PATH)
     parser.add_argument("--limit", type=int, default=0,
                         help="score only the first N rows -- for a cheap API smoke test")
@@ -41,11 +52,16 @@ def main():
         rows = rows[: args.limit]
     kwargs = {}
     if args.judge == "fireworks":
-        kwargs = {"style": args.judge_style, "workers": args.workers}
+        kwargs = {"style": args.judge_style, "workers": args.workers,
+                  "reasoning_effort": args.reasoning_effort,
+                  "max_tokens": args.max_tokens}
         if args.judge_model:
             kwargs["model"] = args.judge_model
     judge = scoring.make_judge(args.judge, **kwargs)
-    logger.info("scoring %s on %d rows from %s", judge.name, len(rows), args.rows)
+    logger.info("scoring %s on %d rows from %s (reasoning_effort=%r, max_tokens=%s)",
+                judge.name, len(rows), args.rows,
+                getattr(judge, "reasoning_effort", None),
+                getattr(judge, "max_tokens", None))
 
     sweep = None
     if args.sweep_threshold:

@@ -69,12 +69,17 @@ Options:
   --judge J          fireworks (default) | substring | none.
                      fireworks is the default because it is the only one whose ASR is
                      worth quoting: on JailbreakBench's 300 human-labelled rows the
-                     HarmBench prompt agrees 87.0% at a 14.2% false-positive rate,
+                     HarmBench prompt agrees 88.7% at an 11.6% false-positive rate,
                      against substring matching's 55.3% / 69.5%. It needs
                      FIREWORKS_API_KEY (or FIREWORKS_KEY, or a gitignored .env) and
                      sends the goals and the completions to a third party. --judge
                      substring keeps the run local and offline, and the join then says
-                     on its face that every rate it reports is an upper bound
+                     on its face that every rate it reports is an upper bound.
+                     The judge's own scorecard against the 300 human-labelled rows is
+                     computed once per (judge, threshold) and cached under
+                     results/_judge/validation/, so a sweep pays those 300 calls a
+                     grader one time rather than once per model. It is a property of
+                     the judge; the model under test never enters it
   --judge_style S    comma-separated graders for --judge fireworks
                      (default: harmbench,strongreject). One generation pass, one API
                      call per grader per row. The first is canonical and supplies the
@@ -99,8 +104,8 @@ Options:
 
 WHAT THE JOIN SCORES. The 2x2's success axis is read off the behavior rather than
 fixed: jbb_refusal is the only behavior whose own scorer IS a judge, so it joins on
-jailbroken_judge -- the HarmBench prompt under --judge fireworks, 87.0% agreement with
-JailbreakBench's 300 human labels at a 14.2% false-positive rate. Every other behavior
+jailbroken_judge -- the HarmBench prompt under --judge fireworks, 88.7% agreement with
+JailbreakBench's 300 human labels at an 11.6% false-positive rate. Every other behavior
 joins on behavior_hit, its own scorer, because a refusal-phrase test applied to French
 text or a persona scores near 100% and measures nothing. --jailbroken_field overrides.
 Substring matching agrees 55.3% at a 69.5% false-positive rate; it stays available,
