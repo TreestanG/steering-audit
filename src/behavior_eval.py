@@ -1,6 +1,7 @@
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
 
 import torch
@@ -418,6 +419,7 @@ def main():
     out_dir = args.out_dir or behavior_dir(args.model_name, behavior.name, arm)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    args.judge_style_explicit = any(a.startswith("--judge_style") for a in sys.argv[1:])
     fractions = _csv_floats(args.fractions, "--fractions")
     if args.dtype != "float32":
         logger.warning("--dtype %s: the logit gaps measured here are near this dtype's "
@@ -431,9 +433,19 @@ def main():
             judge_kwargs["threshold"] = args.judge_threshold
         if args.judge_model:
             judge_kwargs["model"] = args.judge_model
+    # A behavior that names its own judge gets it: harmbench measures jailbreaking and
+    # says nothing about whether a reply is cruel, so evil_persona must not inherit the
+    # jailbreak default just because it is first in --judge_style.
+    own_style = behavior.scorer.get("style") if behavior.scorer.get("kind") == "judge" else None
+    style_spec = args.judge_style
+    if own_style and not args.judge_style_explicit:
+        style_spec = own_style
+        logger.info("behavior %s declares judge style %r; using it instead of the default",
+                    behavior.name, own_style)
+
     judges = []
     if args.judge != "none":
-        for style in dict.fromkeys(v.strip() for v in args.judge_style.split(",") if v.strip()):
+        for style in dict.fromkeys(v.strip() for v in style_spec.split(",") if v.strip()):
             kwargs = dict(judge_kwargs)
             if args.judge == "fireworks":
                 kwargs["style"] = style
