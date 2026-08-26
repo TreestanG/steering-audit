@@ -200,7 +200,7 @@ class _Fatal(Exception):
 @dataclass(frozen=True)
 class Score:
     score: float
-    hit: int
+    hit: int | None       # None = no grade, which is not the same as a miss
     detail: dict
 
 
@@ -237,7 +237,9 @@ def lexicon_score(text: str, pos_words, neg_words, window: int | None = None) ->
 
     pos, neg = count(pos_words), count(neg_words)
     total = pos + neg
-    score = pos / total if total else 0.0
+    if not total:
+        return Score(float("nan"), None, {"pos": 0, "neg": 0, "no_signal": True})
+    score = pos / total
     return Score(score, int(score > 0.5), {"pos": pos, "neg": neg})
 
 
