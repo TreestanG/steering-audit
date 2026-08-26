@@ -345,6 +345,13 @@ def evaluate_delta(prompt: str, layer: int, delta: Tensor, *, clean: dict,
                            word_neg=word_neg, budget=budget)[0]
 
 
+def depth_layer(n_layers: int, frac: float, allow_final: bool = False) -> int:
+    if not 0 < frac <= 1:
+        raise SystemExit(f"--layer_frac must be in (0, 1], got {frac}")
+    cap = n_layers if allow_final else n_layers - 1
+    return max(1, min(round(frac * n_layers), cap))
+
+
 def best_steering_layer(gaps_path: str | Path, fraction: float = 0.1,
                         allow_final: bool = False, by: str = "flip") -> int:
     payload = json.loads(Path(gaps_path).read_text())
@@ -629,6 +636,13 @@ def main():
                              "because flip rate and KL both peak wherever a perturbation "
                              "merely wrecks the output and so select the last block on a "
                              "refusal behavior")
+    parser.add_argument("--layer_frac", type=float, default=None,
+                        help="pick the injection layer as this fraction of depth "
+                             "(0.7 -> layer 20 of 28), instead of the per-model best in "
+                             "--gaps. Use it for any CROSS-MODEL comparison: the gaps rule "
+                             "returns a different KIND of layer once the final-block guard "
+                             "fires, so the attacked layer stops being comparable. "
+                             "--layer overrides this; neither falls back to --gaps")
     parser.add_argument("--allow_final_layer", action="store_true",
                         help="let --layer selection pick the last block. Off by default: "
                              "there the final norm sits between the injection and the "
@@ -655,7 +669,16 @@ def main():
                              "computes today")
     parser.add_argument("--arms", type=str, default="caa,random,pgd")
     parser.add_argument("--objective", type=str, default="sentiment", choices=list(OBJECTIVES))
-    parser.add_argument("--steps", type=int, default=200)
+    parser.add_argument("--steps", type=int, default=50,
+                        help="PGD steps per restart (default 50). Finding 7 measured 25 "
+                             "matching 200 to five decimals -- everything is linear over a "
+                             "10x budget range, so the optimizer converges to "
+                             "radius * grad/||grad|| within ~10 steps. That was measured on "
+                             "Pythia-1.4B with the sentiment and CW objectives only, so 50 "
+                             "keeps 2x margin for the models and objectives it was not "
+                             "measured on. Under-converging biases toward FEWER undetected "
+                             "flips, which is the conclusion under test -- raise this "
+                             "rather than lower it if you are unsure")
     parser.add_argument("--lr", type=float, default=None,
                         help="absolute step size; default a tenth of the ball radius")
     parser.add_argument("--n_restarts", type=int, default=3,
@@ -710,9 +733,16 @@ def main():
     gaps_path = args.gaps or behavior_dir(args.model_name, behavior.name,
                                           arm_name) / "gaps.json"
     pick_by = args.pick_by or ("flip" if behavior.name == "sentiment" else "target_gap")
-    layer = (args.layer if args.layer is not None
-             else best_steering_layer(gaps_path, args.fraction, args.allow_final_layer,
-                                      pick_by))
+    if args.layer is not None:
+        layer = args.layer
+    elif args.layer_frac is not None:
+        layer = depth_layer(model.config.num_hidden_layers, args.layer_frac,
+                            args.allow_final_layer)
+        logger.info("layer %d = %.2f of %d blocks (--layer_frac; gaps.json not consulted)",
+                    layer, args.layer_frac, model.config.num_hidden_layers)
+    else:
+        layer = best_steering_layer(gaps_path, args.fraction, args.allow_final_layer,
+                                    pick_by)
 
     fmt = prompt_format.resolve_format(args.prompt_format, behavior)
     items = behavior.items(arm_name, args.n_prompts)
@@ -740,6 +770,7 @@ def main():
     logger.info("behavior %s, arm %s: %d prompts", behavior.name, arm_name, len(prompts))
     logger.info("layer %d (%s), budget %g = %g * rel_tol %g [%s], objective %s",
                 layer, "given" if args.layer is not None
+                else f"{args.layer_frac:g} of depth" if args.layer_frac is not None
                 else f"best in {gaps_path} by {pick_by}",
                 budget, args.budget_frac, rel_tol, args.budget_dtype, args.objective)
     logger.info("%d prompts x %d arms x %d scope(s) -> %s",
