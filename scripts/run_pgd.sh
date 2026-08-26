@@ -36,7 +36,9 @@ or point at another run's copy with --gaps.
                          log P(affirmative continuation), which needs --behavior
                          jbb_refusal (or another behavior with per-item targets)
   --n_prompts N          0 = the whole test set (default), matching gaps.json
-  --steps N              PGD steps per restart (default 200)
+  --steps N              PGD steps per restart (default 50; finding 7 measured 25
+                         matching 200 to five decimals on Pythia/sentiment, and 50
+                         keeps margin where that was not measured)
   --n_restarts N         random inits on top of the zero init (default 3)
   --tag T                suffix every path with _T, as run_model.sh does
   --device D             cuda / mps / cpu (default: best available)

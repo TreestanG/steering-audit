@@ -18,6 +18,10 @@ Stages, in order (each skipped when its output already exists):
   activations  save_activations.py        -> data/activations/<slug>/*.pt
   vocab        vocab_activation_table.py  -> data/activations/<slug>/vocab/vocab_table.pt
   sipit        eval_sipit_layers.sh       -> results/<slug>/sipit/layers/
+  detect       detect.py                  -> results/<slug>/sipit/detector_calibration.json
+               calibrates the per-trajectory detector on the clean inversions just
+               written. Always re-runs -- it is seconds, and a stale calibration is
+               worse than none.
   sentiment    behavior_eval.py           -> results/<slug>/sentiment/gaps.json
   audit        steer_audit.py             -> results/<slug>/steer/audit.jsonl
   fractions    sweep_steer_fractions.sh   -> results/<slug>/steer/fractions/
@@ -46,6 +50,17 @@ Options:
                     comma-separated list of NAME or NAME:ARM, e.g.
                     --behaviors jbb_refusal:harmful,language_fr
   --no_behaviors    stop after the figures, as this script did before
+  --no_pgd          skip the PGD attack. It runs by DEFAULT: CAA is a blunt attack,
+                    and "there is no operating point that steers without tripping the
+                    detector" measured only against CAA is a claim about CAA. PGD is
+                    the adversarial arm that makes finding 1 a statement about the
+                    geometry rather than about one attack
+  --pgd_layer_frac F  inject at this fraction of depth (default 0.7). Fixed rather
+                    than per-model on purpose -- the gaps.json rule returns a
+                    different KIND of layer once the final-block guard fires
+                    (Qwen-0.5B 24->18, Qwen-7B 28->19), so a cross-model attack table
+                    built on it compares two different experiments. 0.7 is where the
+                    per-model winners cluster anyway: 15/24, 20/28, 27/36, 19/28
   --dry_run         print the planned commands and exit
 
 Every stage appends a full DEBUG log to results/<slug>/logs/<stage>.log
@@ -85,6 +100,8 @@ FULL=0
 DRY_RUN=0
 NO_PLOTS=0
 BEHAVIORS=all
+DO_PGD=1
+PGD_LAYER_FRAC=0.7
 CHILD_LEVEL=INFO
 
 while [[ $# -gt 0 ]]; do
@@ -93,6 +110,9 @@ while [[ $# -gt 0 ]]; do
         --force)    FORCE=1; shift ;;
         --no_plots) NO_PLOTS=1; shift ;;
         --behaviors)    BEHAVIORS=$2; shift 2 ;;
+        --pgd)          DO_PGD=1; shift ;;
+        --no_pgd)       DO_PGD=0; shift ;;
+        --pgd_layer_frac) PGD_LAYER_FRAC=$2; shift 2 ;;
         --no_behaviors) BEHAVIORS=; shift ;;
         --dry_run)  DRY_RUN=1; shift ;;
         -v | --verbose) CHILD_LEVEL=DEBUG; shift ;;
@@ -285,6 +305,12 @@ print(AutoConfig.from_pretrained('$MODEL').num_hidden_layers)" 2>"$probe_err" | 
     stage sipit "$RES/sipit/layers/sipit_layer_00.jsonl" \
         scripts/eval_sipit_layers.sh --act_dir "$ACT_DIR" --n_prompts "$SIPIT_PROMPTS" \
             --model_name "$MODEL" --dtype "$DTYPE" ${DEVICE:+--device "$DEVICE"}
+    # Cheap post-hoc read of the sipit rows just written -- no GPU, no API, seconds. It
+    # produces the operating point for the detector this repo actually ships, and its
+    # sentinel is "-" so it always re-runs: a calibration file that predates a change to
+    # the rule is worse than none, and the cost of refreshing it is nil.
+    stage detect - \
+        uv run src/detect.py --slug "$SLUG" --sensitivity
     stage sentiment "$RES/sentiment/gaps.json" \
         uv run src/behavior_eval.py "${COMMON[@]}" --behavior sentiment \
             --fractions "$FRACTIONS" --no_target_gap
@@ -321,6 +347,22 @@ print(AutoConfig.from_pretrained('$MODEL').num_hidden_layers)" 2>"$probe_err" | 
                 ${BEHAVIOR_ARGS[@]+"${BEHAVIOR_ARGS[@]}"} \
                 || FAILED+=("behavior:$name/$arm")
         done
+    fi
+
+    # The adversarial half (findings 6-8). On by default: CAA is a trivial attack, and a
+    # null result against it says nothing about an optimizer that is allowed to search
+    # under the detector's own constraint. It needs a layer policy to mean anything
+    # across models -- --pgd_layer_frac pins the injection to a fixed fraction of depth
+    # so "the attacked layer" is the same experiment everywhere, instead of the gaps.json
+    # rule handing back a demoted runner-up on models whose best layer is the last block.
+    if [[ $DO_PGD -eq 1 ]]; then
+        say ""
+        say "  pgd          layer_frac $PGD_LAYER_FRAC"
+        local pargs=(--tag "$TAG" --layer_frac "$PGD_LAYER_FRAC")
+        [[ -n $DEVICE ]] && pargs+=(--device "$DEVICE")
+        [[ $FORCE -eq 1 ]] && pargs+=(--force)
+        [[ $DRY_RUN -eq 1 ]] && pargs+=(--dry_run)
+        scripts/run_pgd.sh "$MODEL" "${pargs[@]}" || FAILED+=("pgd")
     fi
 
     say ""
