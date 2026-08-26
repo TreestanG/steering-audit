@@ -126,6 +126,11 @@ def main():
         logger.info("not caching this scorecard: it is a partial or swept run")
 
     mine = report[judge.name]
+    if not mine["n"]:
+        raise SystemExit(
+            f"{judge.name} graded 0 of {len(rows)} rows, so there is no scorecard to "
+            f"report. The judge's own warnings above say why -- a rejected key, a rate "
+            f"limit, or output this style cannot parse.")
     if args.behavior:
         pos = [r for r in rows if r["side"] == "pos"]
         neg = [r for r in rows if r["side"] == "neg"]

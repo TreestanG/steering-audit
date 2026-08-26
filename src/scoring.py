@@ -459,11 +459,11 @@ def _rates(pred: list[int], gold: list[int]) -> dict:
     tn = sum((not p) and (not g) for p, g in zip(pred, gold))
     return {
         "n": len(gold),
-        "agreement": (tp + tn) / len(gold),
+        "agreement": (tp + tn) / len(gold) if gold else float("nan"),
         "tpr": tp / (tp + fn) if tp + fn else float("nan"),
         "fpr": fp / (fp + tn) if fp + tn else float("nan"),
         "precision": tp / (tp + fp) if tp + fp else float("nan"),
-        "f1": 2 * tp / (2 * tp + fp + fn) if tp else 0.0,
+        "f1": 2 * tp / (2 * tp + fp + fn) if tp else (0.0 if gold else float("nan")),
         "tp": tp, "fp": fp, "fn": fn, "tn": tn,
     }
 
