@@ -16,11 +16,23 @@ JUDGE_FIELD = "jailbroken_judge"
 BEHAVIOR_FIELD = "behavior_hit"
 
 
-def default_field(behavior: behaviors.Behavior) -> str:
+def default_field(behavior: behaviors.Behavior, columns) -> str:
     if behavior.scorer.get("kind") != "judge":
         return BEHAVIOR_FIELD
     style = behavior.scorer.get("style")
-    return f"judge_{style}" if style else JUDGE_FIELD
+    if not style:
+        return JUDGE_FIELD
+    named = f"judge_{style}"
+    if named in columns:
+        return named
+    logger.warning(
+        "%s declares judge style %r but %r is not in this generation -- no %s judge ran. "
+        "Falling back to %r, the behavior's own %s scorer, which measures the same thing "
+        "without an API. Re-run behavior_eval with --judge fireworks (and either no "
+        "--judge_style or one including %s) for the graded column.",
+        behavior.name, style, named, style, BEHAVIOR_FIELD,
+        behavior.scorer.get("fallback", {}).get("kind", "fallback"), style)
+    return BEHAVIOR_FIELD
 
 
 def judge_styles(row: dict) -> set[str]:
@@ -267,11 +279,13 @@ def main():
                              "||h||, so a different threshold is a re-read, not a re-run")
     parser.add_argument("--jailbroken_field", type=str, default=None,
                         help=f"which column counts as success. Default is read off the "
-                             f"behavior: {JUDGE_FIELD!r} (the canonical LLM judge -- "
-                             f"HarmBench under --judge fireworks) when the behavior's own "
-                             f"scorer is a judge, otherwise {BEHAVIOR_FIELD!r}, the "
-                             f"behavior's own scorer. 'jailbroken_substring' selects the "
-                             f"upper-bound metric explicitly")
+                             f"behavior: the grader its scorer names, as judge_<style>; "
+                             f"else {JUDGE_FIELD!r} (the canonical LLM judge -- HarmBench "
+                             f"under --judge fireworks) when the scorer is a judge but "
+                             f"names no style; else {BEHAVIOR_FIELD!r}, the behavior's own "
+                             f"scorer, which is also the fallback when a named grader did "
+                             f"not run. 'jailbroken_substring' selects the upper-bound "
+                             f"metric explicitly")
     parser.add_argument("--allow_positions_mismatch", action="store_true",
                         help="join anyway when the two stages steered different positions. "
                              "The result is not a 2x2 on one intervention -- it pairs a "
@@ -304,10 +318,11 @@ def main():
     logger.info("generation: %d rows from %s", len(completions), completions_path)
     audit = load_audit(audit_dir)
 
-    field = args.jailbroken_field or default_field(behavior)
+    field = args.jailbroken_field or default_field(behavior, completions[0])
     if field not in completions[0]:
         available = sorted(k for k in completions[0]
-                           if k.startswith("jailbroken") or k == BEHAVIOR_FIELD)
+                           if k.startswith("jailbroken") or k == BEHAVIOR_FIELD
+                           or (k.startswith("judge_") and not k.endswith("_score")))
         raise SystemExit(f"--jailbroken_field {field!r} is not in {completions_path}; "
                          f"have {available}")
     styles = judge_styles(completions[0])

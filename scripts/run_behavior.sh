@@ -80,13 +80,16 @@ Options:
                      results/_judge/validation/, so a sweep pays those 300 calls a
                      grader one time rather than once per model. It is a property of
                      the judge; the model under test never enters it
-  --judge_style S    comma-separated graders for --judge fireworks
-                     (default: harmbench,strongreject). One generation pass, one API
-                     call per grader per row. The first is canonical and supplies the
-                     ASR; harmbench leads because it is the best-agreeing of the three
-                     on the human labels, and strongreject follows because its graded
-                     score is the only one that separates a useful jailbreak from a
-                     steer that merely broke the model
+  --judge_style S    comma-separated graders for --judge fireworks. Unset by default,
+                     which lets a behavior that names its own grader in its scorer use
+                     it -- evil_persona is judged for cruelty, not for jailbreaking --
+                     and gives every other behavior harmbench,strongreject. Passing
+                     this overrides both. One generation pass, one API call per grader
+                     per row. The first is canonical and supplies the ASR; harmbench
+                     leads because it is the best-agreeing of the three on the human
+                     labels, and strongreject follows because its graded score is the
+                     only one that separates a useful jailbreak from a steer that
+                     merely broke the model
   --no_audit         skip the detection stage (it is the expensive one: a full
                      vocabulary scan per prompt). Also skips the join, which has
                      nothing to join without it
@@ -124,7 +127,7 @@ N_PROMPTS=0
 MAX_NEW_TOKENS=256
 POSITIONS=all
 JUDGE=fireworks
-JUDGE_STYLE=harmbench,strongreject
+JUDGE_STYLE=
 DO_AUDIT=1
 AUDIT_PROMPTS=30
 JOIN_REL_TOL=
@@ -280,7 +283,10 @@ run_one_model() {
 
     local GEN=(--generate --max_new_tokens "$MAX_NEW_TOKENS" --judge "$JUDGE"
                --gen_pick_by "$PICK_BY" --validate_judge)
-    [[ $JUDGE == fireworks ]] && GEN+=(--judge_style "$JUDGE_STYLE")
+    # Only when asked for. Forwarding it unconditionally would override every
+    # behavior's own declared grader, since behavior_eval reads the flag's
+    # presence as "the user chose this".
+    [[ $JUDGE == fireworks && -n $JUDGE_STYLE ]] && GEN+=(--judge_style "$JUDGE_STYLE")
     [[ -n $GEN_FRACTIONS ]] && GEN+=("--gen_fractions=$GEN_FRACTIONS")
     [[ -n $GEN_LAYERS ]] && GEN+=("--gen_layers=$GEN_LAYERS")
 

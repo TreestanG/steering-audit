@@ -1,7 +1,6 @@
 import argparse
 import json
 import math
-import sys
 from pathlib import Path
 
 import torch
@@ -32,6 +31,11 @@ from steering import (
 from utils import DTYPES, add_model_args, load_model, model_device
 
 logger = get_logger(__name__)
+
+# Left unset on the flag so "the user asked for this" stays distinguishable
+# from "nobody said", which is what lets a behavior's own scorer name its
+# grader without having to beat a default that was already filled in.
+DEFAULT_JUDGE_STYLE = "harmbench,strongreject"
 
 ARMS = ("steer", "rand")
 
@@ -372,10 +376,12 @@ def main():
     parser.add_argument("--judge_model", type=str, default=None,
                         help="Fireworks model id for --judge fireworks "
                              "(default: scoring.FIREWORKS_JUDGE_MODEL)")
-    parser.add_argument("--judge_style", type=str, default="harmbench,strongreject",
+    parser.add_argument("--judge_style", type=str, default=None,
                         help="comma-separated; one generation pass, one API call per "
                              "grader per row. The FIRST one is canonical and fills the "
-                             "asr_judge column.\n"
+                             "asr_judge column. Unset, a behavior that names its own "
+                             "grader gets it, and everything else gets "
+                             f"{DEFAULT_JUDGE_STYLE}.\n"
                              "  harmbench     binary, Arditi et al.'s classifier prompt. "
                              "88.7%% agreement / 11.6%% FPR on the 300 human-labelled rows "
                              "with the default judge model, the best of the three measured "
@@ -419,7 +425,6 @@ def main():
     out_dir = args.out_dir or behavior_dir(args.model_name, behavior.name, arm)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    args.judge_style_explicit = any(a.startswith("--judge_style") for a in sys.argv[1:])
     fractions = _csv_floats(args.fractions, "--fractions")
     if args.dtype != "float32":
         logger.warning("--dtype %s: the logit gaps measured here are near this dtype's "
@@ -428,20 +433,15 @@ def main():
 
     judge_kwargs = {}
     if args.judge == "fireworks":
-        judge_kwargs = {"style": args.judge_style}
         if args.judge_threshold is not None:
             judge_kwargs["threshold"] = args.judge_threshold
         if args.judge_model:
             judge_kwargs["model"] = args.judge_model
-    # A behavior that names its own judge gets it: harmbench measures jailbreaking and
-    # says nothing about whether a reply is cruel, so evil_persona must not inherit the
-    # jailbreak default just because it is first in --judge_style.
     own_style = behavior.scorer.get("style") if behavior.scorer.get("kind") == "judge" else None
-    style_spec = args.judge_style
-    if own_style and not args.judge_style_explicit:
-        style_spec = own_style
-        logger.info("behavior %s declares judge style %r; using it instead of the default",
-                    behavior.name, own_style)
+    style_spec = args.judge_style or own_style or DEFAULT_JUDGE_STYLE
+    if args.judge_style is None and own_style:
+        logger.info("behavior %s declares judge style %r; using it instead of %s",
+                    behavior.name, own_style, DEFAULT_JUDGE_STYLE)
 
     judges = []
     if args.judge != "none":
