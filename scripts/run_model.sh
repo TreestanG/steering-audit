@@ -23,6 +23,10 @@ Stages, in order (each skipped when its output already exists):
   fractions    sweep_steer_fractions.sh   -> results/<slug>/steer/fractions/
   recover      steer_recover.py           -> results/<slug>/steer/{recover,localize}.jsonl
   plots        the five plot_*.py         -> results/<slug>/**/figures/
+  behaviors    run_behavior.sh            -> results/<slug>/behavior/<name>/<arm>/
+               every behavior x arm in data/: the multi-token half -- generation, ASR,
+               and the detection-vs-efficacy join. Needs neither the activations nor
+               the vocab table above, so it also runs standalone.
 
 Options:
   -v, --verbose     per-item detail from each stage (-vv also un-silences HF)
@@ -37,6 +41,11 @@ Options:
   --device D        cuda / cuda:1 / mps / cpu (default: best available)
                     Forwarded to every stage; each script also takes it directly.
   --no_plots        run the experiments, skip the figures
+  --behaviors L     which behaviors to run afterwards: "all" (default, every behavior x
+                    arm except sentiment, which the stages above already cover), or a
+                    comma-separated list of NAME or NAME:ARM, e.g.
+                    --behaviors jbb_refusal:harmful,language_fr
+  --no_behaviors    stop after the figures, as this script did before
   --dry_run         print the planned commands and exit
 
 Every stage appends a full DEBUG log to results/<slug>/logs/<stage>.log
@@ -54,11 +63,15 @@ Note that --dtype must match the table on disk; sipit.py refuses a mismatch.
   scripts/run_model.sh gpt2 Qwen/Qwen2.5-0.5B-Instruct Qwen/Qwen2.5-1.5B-Instruct \
       --full --dtype float16                # three models, in order, one dtype
 
-This is the SENTIMENT pipeline: one behavior, single-token metrics, plus the SipIt
-and recomputation audits that do not depend on a behavior at all. The refusal,
-evil-persona, language and JailbreakBench behaviors -- and every multi-token metric,
-including ASR -- live in scripts/run_behavior.sh, which reuses the artifacts this
-one builds.
+This runs the WHOLE pipeline: the sentiment half (single-token metrics plus the SipIt
+and recomputation audits, which do not depend on a behavior at all), then every other
+behavior through scripts/run_behavior.sh -- generation, ASR, and the detection-vs-
+efficacy join. --no_behaviors stops after the figures.
+
+Sizes follow the same quick/full split as everything else: without --full the behavior
+half runs 4 prompts, 2 audited, 16 new tokens and the offline substring judge, so a
+smoke test needs no API key. With --full it uses run_behavior.sh's real defaults --
+the whole arm, 30 audited prompts, and the model judge, which DOES need one.
 EOF
 }
 
@@ -71,6 +84,7 @@ FORCE=0
 FULL=0
 DRY_RUN=0
 NO_PLOTS=0
+BEHAVIORS=all
 CHILD_LEVEL=INFO
 
 while [[ $# -gt 0 ]]; do
@@ -78,6 +92,8 @@ while [[ $# -gt 0 ]]; do
         --full)     FULL=1; shift ;;
         --force)    FORCE=1; shift ;;
         --no_plots) NO_PLOTS=1; shift ;;
+        --behaviors)    BEHAVIORS=$2; shift 2 ;;
+        --no_behaviors) BEHAVIORS=; shift ;;
         --dry_run)  DRY_RUN=1; shift ;;
         -v | --verbose) CHILD_LEVEL=DEBUG; shift ;;
         -vv)            CHILD_LEVEL=DEBUG; VV=1; shift ;;
@@ -117,10 +133,45 @@ if [[ $FULL -eq 1 ]]; then
     SIPIT_PROMPTS=100; AUDIT_PROMPTS=5; RECOVER_PROMPTS=5
     FRACTIONS=0.01,0.02,0.05,0.1,0.2,0.5,1,2
     MODE="full"
+    # real sizes: run_behavior.sh's own defaults (whole arm, 30 audit prompts, model judge)
+    BEHAVIOR_ARGS=()
 else
     SIPIT_PROMPTS=2; AUDIT_PROMPTS=1; RECOVER_PROMPTS=1
     FRACTIONS=0.1,1
     MODE="quick (--full for real run sizes)"
+    # a smoke test of the behavior half has to stay one: a handful of prompts, two
+    # audited, short completions, and the offline judge so it needs no API key
+    BEHAVIOR_ARGS=(--n_prompts 4 --audit_prompts 2 --max_new_tokens 16 --judge substring)
+fi
+
+if [[ -n $BEHAVIORS ]]; then
+    # "all" is every behavior x arm the datasets define, minus sentiment, which the
+    # stages above already cover under its own single-token metric.
+    if ! BEHAVIOR_RUNS=$(AAT_WANT=$BEHAVIORS uv run python - <<'PY' 2>&1
+import os, sys
+sys.path.insert(0, "src")
+import behaviors
+want = os.environ["AAT_WANT"]
+out = []
+if want == "all":
+    for name in behaviors.list_behaviors():
+        if name == "sentiment":
+            continue
+        out += [f"{name}:{arm}" for arm in behaviors.load_behavior(name).arm_names()]
+else:
+    for spec in (v.strip() for v in want.split(",") if v.strip()):
+        name, _, arm = spec.partition(":")
+        b = behaviors.load_behavior(name)
+        if arm and arm not in b.arms:
+            raise SystemExit(f"no test arm {arm!r} in {name}; have {', '.join(b.arm_names())}")
+        out += [f"{name}:{arm}"] if arm else [f"{name}:{a}" for a in b.arm_names()]
+print(" ".join(out))
+PY
+); then
+        printf '%s\n' "$BEHAVIOR_RUNS" >&2
+        exit 1
+    fi
+    BEHAVIOR_RUNS=${BEHAVIOR_RUNS##*$'\n'}
 fi
 
 REL_TOL=$(uv run python -c "
@@ -254,6 +305,22 @@ print(AutoConfig.from_pretrained('$MODEL').num_hidden_layers)" 2>"$probe_err" | 
         stage plot-fraction - uv run src/plot_fraction_sweep.py --model_name "$MODEL" --rel_tol "$REL_TOL"
         stage plot-recover  - uv run src/plot_steer_recover.py --model_name "$MODEL"
         stage plot-gap      - uv run src/plot_gap_vs_steering.py --model_name "$MODEL" --rel_tol "$REL_TOL"
+    fi
+
+    if [[ -n $BEHAVIORS ]]; then
+        say ""
+        local spec name arm bargs
+        for spec in $BEHAVIOR_RUNS; do
+            name=${spec%%:*}; arm=${spec##*:}
+            say "  behavior     $name / $arm"
+            bargs=(--behavior "$name" --arm "$arm" --tag "$TAG" --dtype "$DTYPE")
+            [[ -n $DEVICE ]] && bargs+=(--device "$DEVICE")
+            [[ $FORCE -eq 1 ]] && bargs+=(--force)
+            [[ $DRY_RUN -eq 1 ]] && bargs+=(--dry_run)
+            scripts/run_behavior.sh "$MODEL" "${bargs[@]}" \
+                ${BEHAVIOR_ARGS[@]+"${BEHAVIOR_ARGS[@]}"} \
+                || FAILED+=("behavior:$name/$arm")
+        done
     fi
 
     say ""

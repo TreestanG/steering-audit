@@ -17,13 +17,10 @@ BEHAVIOR_FIELD = "behavior_hit"
 
 
 def default_field(behavior: behaviors.Behavior) -> str:
-    """Which column counts as success, read off the behavior's own primary metric.
-
-    Only a behavior whose scorer IS a judge (jbb_refusal) should be joined on the
-    judge column; for the rest, jailbroken_judge is a refusal-phrase test applied to
-    French text or a persona, which scores near 100% and means nothing.
-    """
-    return JUDGE_FIELD if behavior.scorer.get("kind") == "judge" else BEHAVIOR_FIELD
+    if behavior.scorer.get("kind") != "judge":
+        return BEHAVIOR_FIELD
+    style = behavior.scorer.get("style")
+    return f"judge_{style}" if style else JUDGE_FIELD
 
 
 def judge_styles(row: dict) -> set[str]:
