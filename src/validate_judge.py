@@ -9,6 +9,32 @@ from log import setup as log_setup
 logger = get_logger(__name__)
 
 
+def construct_rows(behavior_name: str, model_name: str, max_new_tokens: int) -> list[dict]:
+    import behaviors
+    import prompt_format
+    from generate import generate_completions
+    from utils import DTYPES, load_model, pick_device
+
+    behavior = behaviors.load_behavior(behavior_name)
+    if behavior.pos_system is None or behavior.neg_system is None:
+        raise SystemExit(f"{behavior_name} has no system-prompt contrast to validate against")
+    load_model(model_name, dtype=DTYPES["float32"], device=pick_device())
+    fmt = prompt_format.resolve_format("auto", behavior)
+    pairs = prompt_format.render_contrast_pairs(behavior, fmt)
+    questions = list(behavior.train_questions)
+    logger.info("generating %d contrast completions with %s (%d questions x 2 system "
+                "prompts, %d new tokens)", 2 * len(pairs), model_name, len(pairs),
+                max_new_tokens)
+
+    rows = []
+    for side, idx, gold in (("pos", 0, 1), ("neg", 1, 0)):
+        texts = generate_completions([p[idx] for p in pairs],
+                                     max_new_tokens=max_new_tokens, batch_size=8)
+        rows.extend({"prompt": q, "response": t, "human_majority": gold, "side": side}
+                    for q, t in zip(questions, texts))
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--judge", type=str, default="substring",
@@ -38,6 +64,18 @@ def main():
                         help="default: scoring.JUDGE_MAX_TOKENS for the style. Passing a "
                              "number here overrides the per-style cap, so leave it unset "
                              "unless you are deliberately measuring truncation")
+    parser.add_argument("--behavior", type=str, default=None,
+                        help="validate a behavior's declared judge against its OWN "
+                             "system-prompt contrast instead of the JailbreakBench rows. "
+                             "There are no human labels for a persona, but the dataset "
+                             "defines the construct: a reply generated under pos_system "
+                             "IS the behavior and one under neg_system is not. Weaker "
+                             "than human agreement and must be reported as such -- it "
+                             "shows the judge tracks the construct, not that it tracks "
+                             "people. Needs --model_name to generate with")
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct",
+                        help="model that generates the contrast completions for --behavior")
+    parser.add_argument("--max_new_tokens", type=int, default=64)
     parser.add_argument("--rows", type=Path, default=scoring.JUDGE_COMPARISON_PATH)
     parser.add_argument("--limit", type=int, default=0,
                         help="score only the first N rows -- for a cheap API smoke test")
@@ -47,7 +85,10 @@ def main():
     args = parser.parse_args()
     log_setup(args)
 
-    rows = scoring.load_judge_comparison(args.rows)
+    if args.behavior:
+        rows = construct_rows(args.behavior, args.model_name, args.max_new_tokens)
+    else:
+        rows = scoring.load_judge_comparison(args.rows)
     if args.limit:
         rows = rows[: args.limit]
     kwargs = {}
@@ -78,12 +119,38 @@ def main():
     # Populate the shared cache so a sweep reuses this run rather than paying again --
     # but only from a full, unswept scoring, since a --limit smoke test or a threshold
     # picked by --sweep_threshold is not the scorecard the sweep should inherit.
-    if not args.limit and not args.sweep_threshold and args.rows == scoring.JUDGE_COMPARISON_PATH:
+    if (not args.limit and not args.sweep_threshold and not args.behavior
+            and args.rows == scoring.JUDGE_COMPARISON_PATH):
         scoring.write_validation(judge, report)
     else:
         logger.info("not caching this scorecard: it is a partial or swept run")
 
     mine = report[judge.name]
+    if args.behavior:
+        pos = [r for r in rows if r["side"] == "pos"]
+        neg = [r for r in rows if r["side"] == "neg"]
+        logger.info("")
+        logger.info("CONSTRUCT validity for %s on %s, not human agreement: %d replies "
+                    "under pos_system and %d under neg_system, labelled by construction.",
+                    args.behavior, args.model_name, len(pos), len(neg))
+        logger.info("  recall on pos_system (judge sees the behavior)  %5.1f%%",
+                    100 * mine["tpr"])
+        logger.info("  false alarms on neg_system (judge invents it)   %5.1f%%",
+                    100 * mine["fpr"])
+        if mine["tpr"] < 0.5:
+            logger.warning("the judge misses more than half of the replies the cruel "
+                           "system prompt produced -- either the prompt is not eliciting "
+                           "the persona on this model, or the judge cannot see it. Read "
+                           "some completions before using this judge.")
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(json.dumps(
+                {"judge": judge.name, "behavior": args.behavior,
+                 "generated_by": args.model_name, "validity": "construct",
+                 "n_pos": len(pos), "n_neg": len(neg), "report": report,
+                 "rows": rows}, indent=2) + "\n")
+            logger.info("wrote %s", args.out)
+        return
     references = sorted(m["agreement"] for name, m in report.items()
                         if name.startswith("reference:"))
     rank = sum(1 for a in references if mine["agreement"] > a)
