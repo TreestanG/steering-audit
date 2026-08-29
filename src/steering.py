@@ -147,7 +147,7 @@ def token_id(word):
 
 def first_token_id(text: str) -> int:
     _, tokenizer = require_model()
-    ids = tokenizer.encode(text)
+    ids = tokenizer.encode(text, add_special_tokens=False)
     if not ids:
         raise ValueError(f"{text!r} encodes to nothing")
     return ids[0]
