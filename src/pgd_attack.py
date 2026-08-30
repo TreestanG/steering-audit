@@ -8,6 +8,7 @@ from torch import Tensor
 
 import behaviors
 import prompt_format
+from generate import resolve_index
 from log import add_logging_args, get_logger
 from log import setup as log_setup
 from paths import behavior_dir, experiment_dir, logs_dir
@@ -94,9 +95,10 @@ def _encode_with_targets(prompts: list[str], targets: list[str]):
 
 def clean_reference(prompts: str | list[str], layer: int,
                     targets: list[str] | None = None, *,
-                    position: str = "last") -> dict:
-    if position not in POSITIONS:
-        raise ValueError(f"position must be one of {POSITIONS}, got {position!r}")
+                    position: str | int = "last") -> dict:
+    if isinstance(position, str) and position not in POSITIONS:
+        raise ValueError(f"position must be an int or one of {POSITIONS}, "
+                         f"got {position!r}")
     model, tokenizer = require_model()
     device = model_device()
     if isinstance(prompts, str):
@@ -114,8 +116,20 @@ def clean_reference(prompts: str | list[str], layer: int,
         read_positions = prompt_end.to(device)
         target_span = {"read_at": read_at.to(device), "tokens": tokens.to(device),
                        "keep": keep.to(device)}
-    positions = (torch.zeros_like(read_positions) if position == "first"
-                 else read_positions)
+    if position == "last":
+        positions = read_positions
+    elif position == "first":
+        positions = torch.zeros_like(read_positions)
+    else:
+        # right padding here, so the first real token is index 0 on every row and
+        # an absolute index doubles as the offset from it
+        first = torch.zeros_like(read_positions)
+        positions = resolve_index(int(position), first, read_positions)
+        short = int((positions != int(position)).sum()) if position >= 0 else 0
+        if short:
+            logger.warning("position %d is past the end of %d/%d prompts; those rows "
+                           "were clamped to their last prompt token",
+                           position, short, len(prompts))
     with torch.no_grad():
         out = model(**inputs, output_hidden_states=True, use_cache=False)
     rows = torch.arange(len(prompts), device=device)

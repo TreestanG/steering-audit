@@ -15,7 +15,40 @@ from utils import get_decoder_layers, model_device, require_model
 
 logger = get_logger(__name__)
 
-POSITIONS = ("last", "all", "first")
+POSITIONS = ("last", "all", "first", "index")
+
+
+def span_bounds(mask: Tensor | None, hidden: Tensor,
+                at: Tensor | None = None) -> tuple[Tensor, Tensor]:
+    """(first real token, anchor end) per row, in this tensor's own indexing.
+
+    `at` overrides the end when the caller knows the prompt ends before the last
+    real token, as it does once a teacher-forced target is appended.
+    """
+    rows, width, device = hidden.shape[0], hidden.shape[1], hidden.device
+    if mask is not None and mask.shape[1] == width:
+        m = mask.to(device)
+        first = m.float().argmax(dim=1)
+        last = width - 1 - m.flip(1).float().argmax(dim=1)
+    else:
+        first = torch.zeros(rows, dtype=torch.long, device=device)
+        last = torch.full((rows,), width - 1, dtype=torch.long, device=device)
+    end = last if at is None else at.to(device)
+    return first.long(), end.long()
+
+
+def resolve_index(index: int | Tensor, first: Tensor, end: Tensor) -> Tensor:
+    """Absolute per-row index for an offset that may be negative or per-row.
+
+    Non-negative counts forward from the first real token, negative back from
+    `end` (-1 is `end` itself). Rows whose span is shorter than the offset are
+    clamped into it, so a fixed position stays inside every prompt in a batch.
+    """
+    idx = (index if isinstance(index, Tensor)
+           else torch.full_like(first, int(index)))
+    idx = idx.to(device=first.device, dtype=torch.long)
+    at = torch.where(idx >= 0, first + idx, end + 1 + idx)
+    return torch.minimum(torch.maximum(at, first), end)
 
 
 @dataclass
@@ -24,6 +57,7 @@ class Intervention:
     delta: Tensor
     positions: str = "last"
     label: str = "steer"
+    index: int | Tensor = 0
 
     def __post_init__(self):
         if self.positions not in POSITIONS:
@@ -36,6 +70,7 @@ class Intervention:
 
     def hook(self, mask: Tensor | None = None, at: Tensor | None = None):
         delta, positions = self.delta, self.positions
+        index = 0 if positions == "first" else self.index
 
         def apply(hidden: Tensor) -> Tensor:
             hidden = hidden.clone()
@@ -45,15 +80,12 @@ class Intervention:
                     hidden += mask.to(hidden.dtype).unsqueeze(-1) * d
                 else:
                     hidden += d
-            elif positions == "first":
+            elif positions in ("first", "index"):
                 # prefill only; a decode step would re-add at every position
                 if hidden.shape[1] > 1:
                     rows = torch.arange(hidden.shape[0], device=hidden.device)
-                    first = (mask.to(hidden.device).float().argmax(dim=1)
-                             if mask is not None and mask.shape[1] == hidden.shape[1]
-                             else torch.zeros(hidden.shape[0], dtype=torch.long,
-                                              device=hidden.device))
-                    hidden[rows, first] += d
+                    first, end = span_bounds(mask, hidden, at)
+                    hidden[rows, resolve_index(index, first, end)] += d
             elif at is not None and hidden.shape[1] > 1:
                 rows = torch.arange(hidden.shape[0], device=hidden.device)
                 hidden[rows, at.to(hidden.device)] += d
@@ -70,15 +102,6 @@ class Intervention:
 
 
 def position_ids_for(mask: Tensor) -> Tensor:
-    """Positions that ignore left padding: the first REAL token is position 0.
-
-    Without this a left-padded batch is silently wrong on any model with learned
-    absolute position embeddings, because HF defaults position_ids to arange(seq_len)
-    and the pad slots eat the low positions. Measured on gpt2: batched last-token
-    logits differ from the same prompt run alone by up to 104, and a teacher-forced
-    logprob by 2.6 nats. Rotary models (Qwen, Llama, Pythia) are shift-invariant and
-    were never affected, which is exactly what makes this the kind of bug that ships.
-    """
     return (mask.cumsum(dim=-1) - 1).clamp(min=0)
 
 
