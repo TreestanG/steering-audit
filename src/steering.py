@@ -49,13 +49,16 @@ def build_steering_vectors(pairs, layers: list[int] | None = None,
         chunk = pairs[start:start + batch_size]
         flat = [p for pair in chunk for p in pair]
         acts, _ = get_token_activations(flat)
+        # scale sets ||delta||, and delta is injected at the block output, so it has to
+        # be measured there: hidden_states is post-final-norm at the last layer only.
+        pre = (get_token_activations(flat, pre_norm=True)[0]
+               if max(layers) == len(get_decoder_layers()) else acts)
         for layer in layers:
-            at = acts[layer]
+            at, at_pre = acts[layer], pre[layer]
             for i in range(len(chunk)):
-                act_pos, act_neg = at[2 * i], at[2 * i + 1]
-                differences[layer].append(act_pos - act_neg)
-                residuals[layer].append(act_pos)
-                residuals[layer].append(act_neg)
+                differences[layer].append(at[2 * i] - at[2 * i + 1])
+                residuals[layer].append(at_pre[2 * i])
+                residuals[layer].append(at_pre[2 * i + 1])
 
     out = {}
     for layer in layers:

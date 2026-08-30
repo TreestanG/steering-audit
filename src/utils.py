@@ -137,20 +137,39 @@ def get_token_activations(
     prompts: list[str],
     layer: int | None = None,
     last_only: bool = True,
+    pre_norm: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Residual stream per layer. `pre_norm` reads the final block BEFORE the model's
+    final norm, which is the space a steering delta is injected into; hidden_states[-1]
+    is post-norm and the two differ by ||h_pre||/||h_post|| (0.26x to 91x measured)."""
     model, tokenizer = require_model()
 
     inputs = tokenizer(prompts, return_tensors="pt", padding=True)
     device = next(model.parameters()).device
     inputs = {key: value.to(device) for key, value in inputs.items()}
     attention_mask = inputs["attention_mask"]
-    with torch.no_grad():
-        outputs = model(**inputs, output_hidden_states=True)
+    grabbed: dict[int, torch.Tensor] = {}
+    handles = []
+    if pre_norm:
+        for i, block in enumerate(get_decoder_layers()):
+            def grab(module, args, output, k=i + 1):
+                out = output[0] if isinstance(output, tuple) else output
+                grabbed[k] = out.detach()
+            handles.append(block.register_forward_hook(grab))
+    try:
+        with torch.no_grad():
+            outputs = model(**inputs, output_hidden_states=True)
+    finally:
+        for handle in handles:
+            handle.remove()
+    states = list(outputs.hidden_states)
+    for k, value in grabbed.items():
+        states[k] = value
 
     if layer is not None:
-        stacked = outputs.hidden_states[layer]
+        stacked = states[layer]
     else:
-        stacked = torch.stack(outputs.hidden_states, dim=0)
+        stacked = torch.stack(states, dim=0)
 
     if not last_only:
         return stacked, attention_mask
