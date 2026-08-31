@@ -1,0 +1,600 @@
+{
+ "name": "sentiment_ext",
+ "description": "Sentiment, the repo's original behavior, restated in the behavior schema so it shares one code path with the others. It is the odd one out: the contrast is carried by the prompt itself rather than by a system prompt, so it uses the `train_pairs` form, and its natural metric really is single-token -- '... and I felt ___' is answered by one word. Kept as the regression case: every number in the README came from it, and behavior_eval must still reproduce them. [ext] test arm widened to both polarities of the 25 HELD-OUT test keys (50 prompts). train_pairs untouched, so the CAA direction is identical to behavior_sentiment.json.",
+ "source": "hand-authored (data/sentiment_opposites_{train,test}.json)",
+ "kind": "prompt_pairs",
+ "test_template": "{question}",
+ "train_pairs": [
+  [
+   "The movie was wonderful and I felt",
+   "The movie was terrible and I felt"
+  ],
+  [
+   "The meal was excellent and I felt",
+   "The meal was awful and I felt"
+  ],
+  [
+   "The day was amazing and I felt",
+   "The day was horrible and I felt"
+  ],
+  [
+   "The book was delightful and I felt",
+   "The book was dreadful and I felt"
+  ],
+  [
+   "The concert was fantastic and I felt",
+   "The concert was disappointing and I felt"
+  ],
+  [
+   "The vacation was perfect and I felt",
+   "The vacation was miserable and I felt"
+  ],
+  [
+   "The party was fun and I felt",
+   "The party was boring and I felt"
+  ],
+  [
+   "The news was great and I felt",
+   "The news was bad and I felt"
+  ],
+  [
+   "The performance was brilliant and I felt",
+   "The performance was poor and I felt"
+  ],
+  [
+   "The weather was lovely and I felt",
+   "The weather was nasty and I felt"
+  ],
+  [
+   "The gift was thoughtful and I felt",
+   "The gift was thoughtless and I felt"
+  ],
+  [
+   "The service was outstanding and I felt",
+   "The service was appalling and I felt"
+  ],
+  [
+   "The trip was incredible and I felt",
+   "The trip was awful and I felt"
+  ],
+  [
+   "The speech was inspiring and I felt",
+   "The speech was dull and I felt"
+  ],
+  [
+   "The hotel was comfortable and I felt",
+   "The hotel was uncomfortable and I felt"
+  ],
+  [
+   "The coffee was delicious and I felt",
+   "The coffee was disgusting and I felt"
+  ],
+  [
+   "The class was engaging and I felt",
+   "The class was tedious and I felt"
+  ],
+  [
+   "The game was exciting and I felt",
+   "The game was frustrating and I felt"
+  ],
+  [
+   "The interview was successful and I felt",
+   "The interview was disastrous and I felt"
+  ],
+  [
+   "The sunset was beautiful and I felt",
+   "The sunset was ugly and I felt"
+  ],
+  [
+   "The meeting was productive and I felt",
+   "The meeting was useless and I felt"
+  ],
+  [
+   "The song was uplifting and I felt",
+   "The song was depressing and I felt"
+  ],
+  [
+   "The restaurant was superb and I felt",
+   "The restaurant was mediocre and I felt"
+  ],
+  [
+   "The weekend was relaxing and I felt",
+   "The weekend was stressful and I felt"
+  ],
+  [
+   "The play was captivating and I felt",
+   "The play was uninteresting and I felt"
+  ],
+  [
+   "The lesson was helpful and I felt",
+   "The lesson was confusing and I felt"
+  ],
+  [
+   "The hike was rewarding and I felt",
+   "The hike was exhausting and I felt"
+  ],
+  [
+   "The show was entertaining and I felt",
+   "The show was tedious and I felt"
+  ],
+  [
+   "The cake was tasty and I felt",
+   "The cake was bland and I felt"
+  ],
+  [
+   "The festival was lively and I felt",
+   "The festival was dead and I felt"
+  ],
+  [
+   "The project was satisfying and I felt",
+   "The project was disappointing and I felt"
+  ],
+  [
+   "The room was cozy and I felt",
+   "The room was cold and I felt"
+  ],
+  [
+   "The story was touching and I felt",
+   "The story was hollow and I felt"
+  ],
+  [
+   "The flight was smooth and I felt",
+   "The flight was turbulent and I felt"
+  ],
+  [
+   "The garden was peaceful and I felt",
+   "The garden was chaotic and I felt"
+  ],
+  [
+   "The outcome was fortunate and I felt",
+   "The outcome was unfortunate and I felt"
+  ],
+  [
+   "The conversation was pleasant and I felt",
+   "The conversation was awkward and I felt"
+  ],
+  [
+   "The museum was fascinating and I felt",
+   "The museum was boring and I felt"
+  ],
+  [
+   "The workout was energizing and I felt",
+   "The workout was draining and I felt"
+  ],
+  [
+   "The surprise was welcome and I felt",
+   "The surprise was unwelcome and I felt"
+  ],
+  [
+   "The presentation was clear and I felt",
+   "The presentation was muddled and I felt"
+  ],
+  [
+   "The beach was serene and I felt",
+   "The beach was crowded and I felt"
+  ],
+  [
+   "The dinner was memorable and I felt",
+   "The dinner was forgettable and I felt"
+  ],
+  [
+   "The job was fulfilling and I felt",
+   "The job was draining and I felt"
+  ],
+  [
+   "The novel was compelling and I felt",
+   "The novel was flat and I felt"
+  ],
+  [
+   "The morning was bright and I felt",
+   "The morning was gloomy and I felt"
+  ],
+  [
+   "The coach was supportive and I felt",
+   "The coach was harsh and I felt"
+  ],
+  [
+   "The ending was satisfying and I felt",
+   "The ending was unsatisfying and I felt"
+  ],
+  [
+   "The picnic was joyful and I felt",
+   "The picnic was miserable and I felt"
+  ],
+  [
+   "The customer was friendly and I felt",
+   "The customer was rude and I felt"
+  ]
+ ],
+ "test_arms": {
+  "default": [
+   {
+    "index": 0,
+    "question": "The lecture was insightful and I felt",
+    "key": "lecture_insightful_confusing",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 1,
+    "question": "The lecture was confusing and I felt",
+    "key": "lecture_insightful_confusing",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 2,
+    "question": "The soup was flavorful and I felt",
+    "key": "soup_flavorful_tasteless",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 3,
+    "question": "The soup was tasteless and I felt",
+    "key": "soup_flavorful_tasteless",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 4,
+    "question": "The wedding was magical and I felt",
+    "key": "wedding_magical_awkward",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 5,
+    "question": "The wedding was awkward and I felt",
+    "key": "wedding_magical_awkward",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 6,
+    "question": "The exam was fair and I felt",
+    "key": "exam_fair_unfair",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 7,
+    "question": "The exam was unfair and I felt",
+    "key": "exam_fair_unfair",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 8,
+    "question": "The neighborhood was welcoming and I felt",
+    "key": "neighborhood_welcoming_hostile",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 9,
+    "question": "The neighborhood was hostile and I felt",
+    "key": "neighborhood_welcoming_hostile",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 10,
+    "question": "The painting was stunning and I felt",
+    "key": "painting_stunning_ugly",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 11,
+    "question": "The painting was ugly and I felt",
+    "key": "painting_stunning_ugly",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 12,
+    "question": "The commute was easy and I felt",
+    "key": "commute_easy_miserable",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 13,
+    "question": "The commute was miserable and I felt",
+    "key": "commute_easy_miserable",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 14,
+    "question": "The festival was joyful and I felt",
+    "key": "festival_joyful_chaotic",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 15,
+    "question": "The festival was chaotic and I felt",
+    "key": "festival_joyful_chaotic",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 16,
+    "question": "The teacher was encouraging and I felt",
+    "key": "teacher_encouraging_critical",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 17,
+    "question": "The teacher was critical and I felt",
+    "key": "teacher_encouraging_critical",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 18,
+    "question": "The dessert was heavenly and I felt",
+    "key": "dessert_heavenly_awful",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 19,
+    "question": "The dessert was awful and I felt",
+    "key": "dessert_heavenly_awful",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 20,
+    "question": "The debate was stimulating and I felt",
+    "key": "debate_stimulating_pointless",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 21,
+    "question": "The debate was pointless and I felt",
+    "key": "debate_stimulating_pointless",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 22,
+    "question": "The apartment was spacious and I felt",
+    "key": "apartment_spacious_cramped",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 23,
+    "question": "The apartment was cramped and I felt",
+    "key": "apartment_spacious_cramped",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 24,
+    "question": "The match was thrilling and I felt",
+    "key": "match_thrilling_dull",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 25,
+    "question": "The match was dull and I felt",
+    "key": "match_thrilling_dull",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 26,
+    "question": "The advice was wise and I felt",
+    "key": "advice_wise_foolish",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 27,
+    "question": "The advice was foolish and I felt",
+    "key": "advice_wise_foolish",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 28,
+    "question": "The trail was scenic and I felt",
+    "key": "trail_scenic_dreary",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 29,
+    "question": "The trail was dreary and I felt",
+    "key": "trail_scenic_dreary",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 30,
+    "question": "The reunion was warm and I felt",
+    "key": "reunion_warm_tense",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 31,
+    "question": "The reunion was tense and I felt",
+    "key": "reunion_warm_tense",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 32,
+    "question": "The product was reliable and I felt",
+    "key": "product_reliable_faulty",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 33,
+    "question": "The product was faulty and I felt",
+    "key": "product_reliable_faulty",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 34,
+    "question": "The night was peaceful and I felt",
+    "key": "night_peaceful_restless",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 35,
+    "question": "The night was restless and I felt",
+    "key": "night_peaceful_restless",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 36,
+    "question": "The ceremony was moving and I felt",
+    "key": "ceremony_moving_empty",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 37,
+    "question": "The ceremony was empty and I felt",
+    "key": "ceremony_moving_empty",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 38,
+    "question": "The sandwich was satisfying and I felt",
+    "key": "sandwich_satisfying_disappointing",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 39,
+    "question": "The sandwich was disappointing and I felt",
+    "key": "sandwich_satisfying_disappointing",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 40,
+    "question": "The boss was kind and I felt",
+    "key": "boss_kind_cruel",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 41,
+    "question": "The boss was cruel and I felt",
+    "key": "boss_kind_cruel",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 42,
+    "question": "The view was breathtaking and I felt",
+    "key": "view_breathtaking_bleak",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 43,
+    "question": "The view was bleak and I felt",
+    "key": "view_breathtaking_bleak",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 44,
+    "question": "The workshop was useful and I felt",
+    "key": "workshop_useful_wasteful",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 45,
+    "question": "The workshop was wasteful and I felt",
+    "key": "workshop_useful_wasteful",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 46,
+    "question": "The season was wonderful and I felt",
+    "key": "season_wonderful_dreadful",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 47,
+    "question": "The season was dreadful and I felt",
+    "key": "season_wonderful_dreadful",
+    "polarity": "neg",
+    "in_original": true
+   },
+   {
+    "index": 48,
+    "question": "The reception was warm and I felt",
+    "key": "reception_warm_cold",
+    "polarity": "pos",
+    "in_original": false
+   },
+   {
+    "index": 49,
+    "question": "The reception was cold and I felt",
+    "key": "reception_warm_cold",
+    "polarity": "neg",
+    "in_original": true
+   }
+  ]
+ },
+ "default_arm": "default",
+ "targets": {
+  "pos": " happy",
+  "neg": " sad"
+ },
+ "scorer": {
+  "kind": "lexicon",
+  "pos_words": [
+   "happy",
+   "great",
+   "wonderful",
+   "delighted",
+   "pleased",
+   "glad",
+   "excited",
+   "joy",
+   "good",
+   "satisfied",
+   "amazing",
+   "loved"
+  ],
+  "neg_words": [
+   "sad",
+   "terrible",
+   "awful",
+   "disappointed",
+   "upset",
+   "bad",
+   "miserable",
+   "angry",
+   "frustrated",
+   "unhappy",
+   "horrible",
+   "hated"
+  ],
+  "window": 200
+ }
+}
