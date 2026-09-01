@@ -20,11 +20,6 @@ POSITIONS = ("last", "all", "first", "index")
 
 def span_bounds(mask: Tensor | None, hidden: Tensor,
                 at: Tensor | None = None) -> tuple[Tensor, Tensor]:
-    """(first real token, anchor end) per row, in this tensor's own indexing.
-
-    `at` overrides the end when the caller knows the prompt ends before the last
-    real token, as it does once a teacher-forced target is appended.
-    """
     rows, width, device = hidden.shape[0], hidden.shape[1], hidden.device
     if mask is not None and mask.shape[1] == width:
         m = mask.to(device)
@@ -38,15 +33,13 @@ def span_bounds(mask: Tensor | None, hidden: Tensor,
 
 
 def resolve_index(index: int | Tensor, first: Tensor, end: Tensor) -> Tensor:
-    """Absolute per-row index for an offset that may be negative or per-row.
-
-    Non-negative counts forward from the first real token, negative back from
-    `end` (-1 is `end` itself). Rows whose span is shorter than the offset are
-    clamped into it, so a fixed position stays inside every prompt in a batch.
-    """
     idx = (index if isinstance(index, Tensor)
            else torch.full_like(first, int(index)))
     idx = idx.to(device=first.device, dtype=torch.long)
+    # a (batch, m) index asks for m positions per row; the bounds are per row, so
+    # they gain the slot axis. Anything 1-D stays one position per row as before.
+    if idx.dim() == 2 and first.dim() == 1:
+        first, end = first.unsqueeze(-1), end.unsqueeze(-1)
     at = torch.where(idx >= 0, first + idx, end + 1 + idx)
     return torch.minimum(torch.maximum(at, first), end)
 
@@ -85,7 +78,11 @@ class Intervention:
                 if hidden.shape[1] > 1:
                     rows = torch.arange(hidden.shape[0], device=hidden.device)
                     first, end = span_bounds(mask, hidden, at)
-                    hidden[rows, resolve_index(index, first, end)] += d
+                    resolved = resolve_index(index, first, end)
+                    if resolved.dim() == 2:
+                        hidden[rows.unsqueeze(-1), resolved] += d
+                    else:
+                        hidden[rows, resolved] += d
             elif at is not None and hidden.shape[1] > 1:
                 rows = torch.arange(hidden.shape[0], device=hidden.device)
                 hidden[rows, at.to(hidden.device)] += d

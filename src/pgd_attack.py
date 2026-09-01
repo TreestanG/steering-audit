@@ -44,13 +44,25 @@ MAX_BACKOFF = 3
 BACKOFF_SLACK = 0.995
 
 
+def _at(h: Tensor, rows: Tensor, at: Tensor) -> Tensor:
+    return h[rows.unsqueeze(-1) if at.dim() == 2 else rows, at.to(h.device)]
+
+
 def _grad_steer_hidden(output, delta: Tensor, positions: Tensor):
 
     def inject(hidden: Tensor) -> Tensor:
         d = delta.to(device=hidden.device, dtype=hidden.dtype)
-        onehot = torch.zeros(hidden.shape[:2], device=hidden.device, dtype=hidden.dtype)
-        onehot[torch.arange(hidden.shape[0], device=hidden.device), positions] = 1.0
-        return hidden + onehot.unsqueeze(-1) * d.unsqueeze(1)
+        rows = torch.arange(hidden.shape[0], device=hidden.device)
+        pos = positions.to(hidden.device)
+        if d.dim() == 2:
+            onehot = torch.zeros(hidden.shape[:2], device=hidden.device, dtype=hidden.dtype)
+            onehot[rows, pos] = 1.0
+            return hidden + onehot.unsqueeze(-1) * d.unsqueeze(1)
+        slots = torch.arange(d.shape[1], device=hidden.device).unsqueeze(0)
+        sel = torch.zeros(hidden.shape[0], hidden.shape[1], d.shape[1],
+                          device=hidden.device, dtype=hidden.dtype)
+        sel[rows.unsqueeze(-1), pos, slots] = 1.0
+        return hidden + torch.bmm(sel, d)
 
     if isinstance(output, tuple):
         return (inject(output[0]),) + output[1:]
@@ -93,12 +105,23 @@ def _encode_with_targets(prompts: list[str], targets: list[str]):
     return {"input_ids": input_ids, "attention_mask": mask}, read_at, tokens, keep, prompt_end
 
 
+def _suffix_positions(anchor: Tensor, n_positions: int) -> tuple[Tensor, Tensor]:
+    offsets = torch.arange(n_positions, device=anchor.device)
+    at = anchor.unsqueeze(-1) - offsets.unsqueeze(0)
+    return at.clamp_min(0), at >= 0
+
+
 def clean_reference(prompts: str | list[str], layer: int,
                     targets: list[str] | None = None, *,
-                    position: str | int = "last") -> dict:
+                    position: str | int = "last", n_positions: int = 1) -> dict:
     if isinstance(position, str) and position not in POSITIONS:
         raise ValueError(f"position must be an int or one of {POSITIONS}, "
                          f"got {position!r}")
+    if n_positions < 1:
+        raise ValueError(f"n_positions must be >= 1, got {n_positions}")
+    if n_positions > 1 and position != "last":
+        raise ValueError("n_positions > 1 spreads BACKWARD from the injection anchor, "
+                         f"so it is only defined for position='last', not {position!r}")
     model, tokenizer = require_model()
     device = model_device()
     if isinstance(prompts, str):
@@ -136,6 +159,9 @@ def clean_reference(prompts: str | list[str], layer: int,
     states = {k: h[rows, positions].detach().float() for k, h in enumerate(out.hidden_states)}
     if layer not in states or layer < 1:
         raise ValueError(f"layer {layer} out of range 1..{len(states) - 1}")
+    inject_at, inject_keep = _suffix_positions(positions, n_positions)
+    states_at = {k: _at(h, rows, inject_at).detach().float()
+                 for k, h in enumerate(out.hidden_states)}
     reference = {
         "prompts": list(prompts),
         "layer": layer,
@@ -153,6 +179,11 @@ def clean_reference(prompts: str | list[str], layer: int,
                          for k, h in enumerate(out.hidden_states)}
                         if position != "last" else states),
         "h_norm": states[layer].norm(dim=-1),
+        "n_positions": n_positions,
+        "inject_at": inject_at,
+        "inject_keep": inject_keep,
+        "states_at": states_at,
+        "h_norm_at": states_at[layer].norm(dim=-1) * inject_keep,
     }
     reference["target_logprob"] = (
         target_logprob(out.logits, reference).detach() if target_span is not None else None
@@ -164,7 +195,8 @@ def _run_with_delta(clean: dict, layer: int, delta: Tensor, *, want_states: bool
     model, _ = require_model()
     blocks = get_decoder_layers()
     captured: dict[str, Tensor] = {}
-    positions, rows = clean["positions"], clean["rows"]
+    rows = clean["rows"]
+    positions = clean["inject_at"] if delta.dim() == 3 else clean["positions"]
 
     handles = [blocks[layer - 1].register_forward_hook(
         lambda module, args, output: _grad_steer_hidden(output, delta, positions)
@@ -172,7 +204,7 @@ def _run_with_delta(clean: dict, layer: int, delta: Tensor, *, want_states: bool
     if want_states:
         def capture(module, args, output):
             out = output[0] if isinstance(output, tuple) else output
-            captured["h"] = out[rows, positions].detach()
+            captured["h"] = _at(out, rows, positions).detach()
 
         handles.append(blocks[layer - 1].register_forward_hook(capture))
 
@@ -187,13 +219,16 @@ def _run_with_delta(clean: dict, layer: int, delta: Tensor, *, want_states: bool
 @torch.no_grad()
 def _rel_devs_from(out, state: Tensor, clean: dict, layer: int) -> dict[int, Tensor]:
     model, _ = require_model()
-    rows, positions = clean["rows"], clean["positions"]
+    rows = clean["rows"]
+    multi = state.dim() == 3
+    positions = clean["inject_at"] if multi else clean["positions"]
+    clean_states = clean["states_at"] if multi else clean["states"]
     steered_at_layer = apply_final_norm(state.float(), layer)
     devs = {}
     for k in range(layer, model.config.num_hidden_layers + 1):
-        h_clean = clean["states"][k]
+        h_clean = clean_states[k]
         h_steer = (steered_at_layer if k == layer
-                   else out.hidden_states[k][rows, positions].float())
+                   else _at(out.hidden_states[k], rows, positions).float())
         devs[k] = (h_steer - h_clean).norm(dim=-1) / h_clean.norm(dim=-1)
     return devs
 
@@ -297,13 +332,23 @@ def evaluate_deltas(
         clean_target = clean.get("target_logprob")
 
     _, tokenizer = require_model()
+    multi = delta.dim() == 3
     clean_top = clean["logits"].argmax(dim=-1)
     steered_top = steered.argmax(dim=-1)
     delta_norm = delta.norm(dim=-1)
+    if multi:
+        keep = clean["inject_keep"]
+        h_at = clean["h_norm_at"]
+        pooled = {k: v.max(dim=-1).values for k, v in devs.items()}
+        total_norm = delta_norm.norm(dim=-1)
+        total_h = (h_at * keep).norm(dim=-1)
+        rel_per_pos = (delta_norm / h_at.clamp_min(1e-30)).max(dim=-1).values
+    else:
+        pooled = devs
     records = []
     for b, prompt in enumerate(clean["prompts"]):
         gap, kl, flip = efficacy(clean["logits"][b], steered[b], word_pos, word_neg)
-        row_devs = {k: float(v[b]) for k, v in devs.items()}
+        row_devs = {k: float(v[b]) for k, v in pooled.items()}
         argmax_layer = max(row_devs, key=lambda k: row_devs[k])
         max_rel_dev = row_devs[argmax_layer]
         h_norm = float(clean["h_norm"][b])
@@ -317,13 +362,25 @@ def evaluate_deltas(
             "clean_str": tokenizer.decode([int(clean_top[b])]),
             "steered_str": tokenizer.decode([int(steered_top[b])]),
             "h_norm": h_norm,
-            "delta_norm": float(delta_norm[b]),
-            "rel_delta": _ratio(float(delta_norm[b]), h_norm),
+            "delta_norm": float(total_norm[b]) if multi else float(delta_norm[b]),
+            "rel_delta": (float(rel_per_pos[b]) if multi
+                          else _ratio(float(delta_norm[b]), h_norm)),
             "rel_dev_at_layer": row_devs[layer],
             "max_rel_dev": max_rel_dev,
             "argmax_dev_layer": argmax_layer,
             "rel_dev_by_layer": row_devs,
         }
+        if multi:
+            record.update({
+                "n_positions": int(delta.shape[1]),
+                "n_injected": int(keep[b].sum()),
+                "inject_at": clean["inject_at"][b].tolist(),
+                "inject_keep": keep[b].tolist(),
+                "delta_norm_by_position": delta_norm[b].tolist(),
+                "h_norm_by_position": h_at[b].tolist(),
+                "rel_delta_total": _ratio(float(total_norm[b]), float(total_h[b])),
+                "rel_dev_at_layer_by_position": devs[layer][b].tolist(),
+            })
         if budget is not None:
             record["boundary_frac"] = _ratio(max_rel_dev, budget)
         if devs_read is not None:
@@ -343,10 +400,15 @@ def evaluate_deltas(
 
 def _as_batch(delta: Tensor, clean: dict) -> Tensor:
     delta = delta.to(device=model_device(), dtype=torch.float32)
+    m = clean.get("n_positions", 1)
     if delta.dim() == 1:
         delta = delta.unsqueeze(0).expand(clean["batch"], -1)
+        if m > 1:
+            delta = delta.unsqueeze(1).expand(-1, m, -1)
     if delta.shape[0] != clean["batch"]:
         raise ValueError(f"delta has {delta.shape[0]} rows, clean has {clean['batch']}")
+    if delta.dim() == 3 and delta.shape[1] != m:
+        raise ValueError(f"delta covers {delta.shape[1]} positions, clean has {m}")
     return delta.contiguous()
 
 
@@ -393,7 +455,8 @@ def _project(
     max_backoff: int = MAX_BACKOFF,
 ) -> Tensor:
     model, _ = require_model()
-    radius = (budget * clean["h_norm"]).unsqueeze(-1)
+    h_norm = clean["h_norm_at"] if delta.dim() == 3 else clean["h_norm"]
+    radius = (budget * h_norm).unsqueeze(-1)
 
     def ball(d: Tensor) -> Tensor:
         norm = d.norm(dim=-1, keepdim=True).clamp_min(1e-30)
@@ -413,9 +476,24 @@ def _project(
         over = worst(delta)
         if bool((over <= budget).all()):
             break
+        # ONE factor per row, not per position. A deep layer's deviation at position
+        # p mixes every position's delta through attention, so a per-position factor
+        # leaves the cross terms untouched and the loop crawls -- measured 1.043,
+        # 1.010, 1.002 times budget at 3, 6 and 10 backoffs, i.e. an attacker holding
+        # a few percent more perturbation than the budget it is being scored under.
+        # Deviation is near-linear in the whole delta matrix, so a row factor lands in
+        # one step, and it is the rule the single-position path already used.
+        if over.dim() == 2:
+            over = over.max(dim=-1).values
         factor = torch.where(over > budget, BACKOFF_SLACK * budget / over.clamp_min(1e-30),
                              torch.ones_like(over))
-        delta = ball(delta * factor.unsqueeze(-1))
+        while factor.dim() < delta.dim():
+            factor = factor.unsqueeze(-1)
+        delta = ball(delta * factor)
+    else:
+        if bool((worst(delta) > budget).any()):
+            logger.debug("projection exhausted %d backoffs still over budget %g",
+                         max_backoff, budget)
     return delta
 
 
@@ -436,6 +514,7 @@ def pgd_attack_batch(
     max_backoff: int = MAX_BACKOFF,
     targets: list[str] | None = None,
     position: str = "last",
+    n_positions: int = 1,
 ) -> list[dict]:
     if objective not in OBJECTIVES:
         raise ValueError(f"objective must be one of {OBJECTIVES}, got {objective!r}")
@@ -446,10 +525,12 @@ def pgd_attack_batch(
     _warn_if_not_fp32()
 
     model, _ = require_model()
-    clean = clean_reference(prompts, layer, targets, position=position)
+    m = int(n_positions)
+    multi = m > 1
+    clean = clean_reference(prompts, layer, targets, position=position, n_positions=m)
     device = model_device()
     batch, hidden = clean["batch"], model.config.hidden_size
-    radius = budget * clean["h_norm"]
+    radius = budget * (clean["h_norm_at"] if multi else clean["h_norm"])
     lr0 = (0.1 * radius if lr is None
            else torch.full_like(radius, float(lr))).unsqueeze(-1)
 
@@ -460,11 +541,17 @@ def pgd_attack_batch(
     draws = []
     for row_seed in seeds:
         gen = torch.Generator().manual_seed(row_seed)
-        draws.append([torch.randn(hidden, generator=gen) for _ in range(n_restarts)])
+        # (m, hidden) with m=1 draws the same values in the same order as the
+        # (hidden,) this replaced, so single-position runs still reproduce
+        draws.append([torch.randn(m, hidden, generator=gen) for _ in range(n_restarts)])
 
-    inits: list[tuple[str, Tensor]] = [("zero", torch.zeros(batch, hidden))]
+    shape = (batch, m, hidden) if multi else (batch, hidden)
+    inits: list[tuple[str, Tensor]] = [("zero", torch.zeros(shape))]
     for r in range(n_restarts):
         v = torch.stack([draws[b][r] for b in range(batch)])
+        if not multi:
+            v = v.squeeze(1)
+        # a masked slot has radius 0, so it starts and stays at zero
         inits.append((f"random{r}", v / v.norm(dim=-1, keepdim=True) * radius.cpu().unsqueeze(-1)))
 
     def project(d: Tensor) -> Tensor:
@@ -472,7 +559,7 @@ def pgd_attack_batch(
                         constraint=constraint, max_backoff=max_backoff)
 
     best: list[dict | None] = [None] * batch
-    best_delta = torch.zeros(batch, hidden, device=device)
+    best_delta = torch.zeros(*shape, device=device)
     restarts: list[list[dict]] = [[] for _ in range(batch)]
     for name, init in inits:
         delta = project(init.to(device=device, dtype=torch.float32))
@@ -504,6 +591,13 @@ def pgd_attack_batch(
                 best[b] = record
                 best_delta[b] = delta[b]
 
+    loose = [b for b, r in enumerate(best) if r and r.get("boundary_frac", 0) > 1.0]
+    if loose:
+        logger.warning("%d/%d prompts ended above the budget (max %.4f x) -- the "
+                       "projection did not converge, so those rows are NOT scored under "
+                       "the constraint they claim. Raise --max_backoff.", len(loose), batch,
+                       max(best[b]["boundary_frac"] for b in loose))
+
     out_records = []
     for b, record in enumerate(best):
         assert record is not None
@@ -512,7 +606,8 @@ def pgd_attack_batch(
             "layer": layer,
             "budget": budget,
             "steps": steps,
-            "lr": float(lr0[b]),
+            "lr": float(lr0[b].max()),
+            "n_positions": m,
             "objective": objective,
             "constraint": constraint,
             "n_restarts": n_restarts,
@@ -536,6 +631,18 @@ def random_delta(hidden_size: int, radius: float, seed: int) -> Tensor:
     g = torch.Generator().manual_seed(seed)
     v = torch.randn(hidden_size, generator=g)
     return v / v.norm() * radius
+
+
+def random_delta_positions(hidden_size: int, radii: Tensor, seed: int) -> Tensor:
+    """An INDEPENDENT draw per injected position, each at that position's radius.
+
+    Independent rather than one direction repeated: repeating it would make the
+    random arm a rank-1 perturbation and quietly turn it into an ablation of CAA
+    rather than the "any perturbation of this size" control it is meant to be.
+    """
+    g = torch.Generator().manual_seed(seed)
+    v = torch.randn(radii.shape[0], hidden_size, generator=g)
+    return v / v.norm(dim=-1, keepdim=True) * radii.detach().cpu().unsqueeze(-1)
 
 
 def _detection(devs: dict[int, float], layer: int, rel_tol: float) -> dict:
@@ -574,22 +681,29 @@ def _aggregate(rows: list[dict]) -> list[dict]:
         if "max_rel_dev_read" in at[0]:
             entry["max_rel_dev_read_mean"] = mean("max_rel_dev_read")
             entry["rel_dev_read_at_layer_mean"] = mean("rel_dev_read_at_layer")
+        if "rel_delta_total" in at[0]:
+            entry["rel_delta_total_mean"] = mean("rel_delta_total")
+            entry["n_injected_mean"] = mean("n_injected")
         out.append(entry)
     return out
 
 
 def _log_table(summary: list[dict]) -> None:
     has_target = any("d_target_logprob_mean" in s for s in summary)
-    logger.info("%9s %7s %4s %6s %10s %9s %10s %10s %9s %8s %8s%s",
+    multi = any("rel_delta_total_mean" in s for s in summary)
+    logger.info("%9s %7s %4s %6s %10s %9s %10s %10s %9s %8s %8s%s%s",
                 "scope", "arm", "n", "flip%", "gap", "KL",
                 "rel_delta", "max_dev", "bnd_frac", "det@L%", "det>=L%",
+                "  m  tot_rel" if multi else "",
                 "   d_target" if has_target else "")
     for s in summary:
-        logger.info("%9s %7s %4d %5.0f%% %10.4f %9.4f %10.2e %10.2e %9.3f %7.0f%% %7.0f%%%s",
+        logger.info("%9s %7s %4d %5.0f%% %10.4f %9.4f %10.2e %10.2e %9.3f %7.0f%% %7.0f%%%s%s",
                     s["constraint"], s["arm"], s["n"], 100 * s["flip_rate"],
                     s["gap_mean"], s["kl_mean"], s["rel_delta_mean"], s["max_rel_dev_mean"],
                     s["boundary_frac_mean"], 100 * s["detected_at_layer_rate"],
                     100 * s["detected_multilayer_rate"],
+                    (f" {s['n_injected_mean']:4.1f} {s['rel_delta_total_mean']:8.2e}"
+                     if multi else ""),
                     f"  {s['d_target_logprob_mean']:+9.5f}" if has_target else "")
 
 
@@ -640,6 +754,17 @@ def main():
                              "perturbation; the objective is still read at the last "
                              "prompt token. See src/pos0_attack.py for the arms that "
                              "exploit this deliberately")
+    parser.add_argument("--n_positions", type=int, default=1,
+                        help="how many token positions the perturbation is spread over: "
+                             "the last N prompt tokens, ending at --position last. 1 "
+                             "(default) is every existing result here. 0 = the whole "
+                             "prompt. The budget stays PER POSITION, so N is a knob on "
+                             "total perturbation energy at a fixed per-position "
+                             "deviation -- which is exactly what separates the k=1 and "
+                             "k=5 detector calibrations: k=1 reads the max over "
+                             "positions and cannot see N at all, k=5 averages the top "
+                             "five and stops diluting once N >= 5. Only defined for "
+                             "--position last")
     parser.add_argument("--layer", type=int, default=None,
                         help="default: the model's best steering layer, per --gaps")
     parser.add_argument("--gaps", type=Path, default=None,
@@ -733,6 +858,10 @@ def main():
                 else f"pgd_{behavior.name}_{arm_name}_{args.objective}_b{budget:g}")
         if args.position != "last":
             stem += f"_{args.position}"
+        if args.n_positions != 1:
+            # m0 is the whole prompt; the resolved integer goes in the summary, but
+            # the path has to be known before the model loads to skip a finished run
+            stem += f"_m{args.n_positions}"
         args.out = experiment_dir(args.model_name, "pgd") / f"{stem}.jsonl"
     summary_path = args.out.with_suffix(".json")
     if summary_path.exists() and not args.force:
@@ -761,6 +890,23 @@ def main():
     fmt = prompt_format.resolve_format(args.prompt_format, behavior)
     items = behavior.items(arm_name, args.n_prompts)
     prompts = prompt_format.render_prompts(behavior, items, fmt)
+
+    _, tokenizer = require_model()
+    lengths = [len(tokenizer.encode(p)) for p in prompts]
+    if args.n_positions < 0:
+        raise SystemExit(f"--n_positions must be >= 0, got {args.n_positions}")
+    # resolved ONCE over the whole arm, not per chunk: a per-chunk max would make m
+    # depend on the batching, and the deltas file ragged across chunks
+    n_positions = max(lengths) if args.n_positions == 0 else args.n_positions
+    if n_positions > 1:
+        if args.position != "last":
+            raise SystemExit("--n_positions > 1 spreads backward from the injection "
+                             f"anchor, so it needs --position last, not {args.position}")
+        short = sum(l < n_positions for l in lengths)
+        logger.info("spreading over %d positions (the last %d prompt tokens); prompt "
+                    "lengths %d-%d, %d prompt(s) shorter than %d and so injected at "
+                    "fewer", n_positions, n_positions, min(lengths), max(lengths),
+                    short, n_positions)
 
     def _first(side: str) -> int:
         text = behavior.targets.get(side) or items[0].target
@@ -815,12 +961,14 @@ def main():
         "prompt_format": fmt,
         "layer": layer,
         "position": args.position,
+        "n_positions": n_positions,
         "budget": budget,
         "rel_tol": rel_tol,
         "objective": args.objective,
     }
     rows = list(done.values())
     deltas: dict[str, Tensor] = {}
+    inject_at: dict[str, Tensor] = {}
     with args.out.open("a") as handle:
         for constraint in constraints:
             for arm in arms:
@@ -835,7 +983,8 @@ def main():
                     batch_prompts = [p for _, p in chunk]
                     batch_targets = [targets[i] for i in idxs] if targets else None
                     clean = clean_reference(batch_prompts, layer, batch_targets,
-                                            position=args.position)
+                                            position=args.position,
+                                            n_positions=n_positions)
                     extras: list[dict] = [{} for _ in chunk]
 
                     if arm == "pgd":
@@ -846,7 +995,7 @@ def main():
                             constraint=constraint, n_restarts=args.n_restarts,
                             seeds=[args.seed + i for i in idxs],
                             max_backoff=args.max_backoff, targets=batch_targets,
-                            position=args.position,
+                            position=args.position, n_positions=n_positions,
                         )
                         batch_deltas = [r.pop("delta") for r in results]
                         records = []
@@ -864,11 +1013,21 @@ def main():
                             extras[len(records)] = extra
                             records.append({k: v for k, v in r.items() if k not in extra
                                             and k not in ("restarts", "layer", "budget",
-                                                          "objective", "constraint", "init")})
+                                                          "objective", "constraint", "init",
+                                                          "n_positions")})
                     else:
                         if arm == "caa":
                             assert steering is not None
+                            # one direction, repeated at every position; _as_batch
+                            # broadcasts it over both the batch and the m axis
                             raw = caa_delta(*steering[layer], args.fraction)
+                        elif n_positions > 1:
+                            raw = torch.stack([
+                                random_delta_positions(model.config.hidden_size,
+                                                       budget * clean["h_norm_at"][b],
+                                                       args.seed + i)
+                                for b, i in enumerate(idxs)
+                            ])
                         else:
                             raw = torch.stack([
                                 random_delta(model.config.hidden_size,
@@ -895,7 +1054,13 @@ def main():
                         handle.write(json.dumps(row) + "\n")
                         rows.append(row)
                         if args.save_deltas:
-                            deltas[f"{constraint}|{arm}|{i}"] = batch_deltas[b].detach().cpu()
+                            key = f"{constraint}|{arm}|{i}"
+                            deltas[key] = batch_deltas[b].detach().cpu()
+                            # stage 2 re-applies the delta physically, so it needs the
+                            # positions as well as the vectors -- inferring them there
+                            # from a length is the padding-side trap the sanity check
+                            # in pgd_sipit exists to catch
+                            inject_at[key] = clean["inject_at"][b].detach().cpu()
                     handle.flush()
                     logger.info("%9s %-6s %3d/%d  flip=%d/%d  gap %+.4f  bnd %.3f",
                                 constraint, arm, start + len(chunk), len(todo),
@@ -925,7 +1090,9 @@ def main():
     logger.info("wrote %s and %s", args.out, summary_path)
     if args.save_deltas and deltas:
         delta_path = args.out.with_name(args.out.stem + "_deltas.pt")
-        torch.save({"layer": layer, "budget": budget, "deltas": deltas}, delta_path)
+        torch.save({"layer": layer, "budget": budget, "n_positions": n_positions,
+                    "position": args.position, "deltas": deltas,
+                    "inject_at": inject_at}, delta_path)
         logger.info("wrote %s (%d deltas)", delta_path, len(deltas))
 
 

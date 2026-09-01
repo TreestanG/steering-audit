@@ -54,14 +54,33 @@ def objective_key(arm: str, objective: str) -> str:
     return SHARED if arm in OBJECTIVE_FREE else objective
 
 
-def load_deltas(path: Path) -> tuple[int, float, dict[tuple[str, str, int], Tensor]]:
-    """Stage 1's winning perturbations, keyed (constraint, arm, prompt_index)."""
+def positions_key(arm: str, n_positions: int) -> int:
+    """0 marks the clean arm, whose pass is identical at every m and so is shared.
+
+    Every other arm's delta changes with m, so m is part of the cell identity --
+    without it an m=5 run resumes into the m=1 rows and the sweep silently
+    collapses to one cell.
+    """
+    return 0 if arm == CLEAN_ARM else n_positions
+
+
+def load_deltas(path: Path) -> tuple[int, float, int, dict[tuple[str, str, int], Tensor]]:
+    """Stage 1's winning perturbations, keyed (constraint, arm, prompt_index).
+
+    (hidden,) is the single-position attack, (m, hidden) the spread one with slot j
+    j tokens back from the end. Files predating --n_positions read as m=1.
+    """
     blob = torch.load(path, weights_only=False)
+    n_positions = int(blob.get("n_positions", 1))
     out = {}
     for key, vec in blob["deltas"].items():
         constraint, arm, index = key.split("|")
-        out[(constraint, arm, int(index))] = vec.float()
-    return int(blob["layer"]), float(blob["budget"]), out
+        vec = vec.float()
+        if (vec.dim() > 1) != (n_positions > 1):
+            raise SystemExit(f"{path}: n_positions={n_positions} but delta {key} is "
+                             f"shape {tuple(vec.shape)}")
+        out[(constraint, arm, int(index))] = vec
+    return int(blob["layer"]), float(blob["budget"]), n_positions, out
 
 
 def stage1_rows(deltas_path: Path) -> dict[tuple[str, str, int], dict]:
@@ -96,10 +115,30 @@ def read_logits(input_ids: Tensor, intervention: Intervention | None) -> Tensor:
     return out.logits[0, -1].float().cpu()
 
 
-def intervention_for(layer: int, delta: Tensor | None) -> Intervention | None:
+def injected_positions(n_slots: int, n_tokens: int) -> list[int]:
+    """Absolute positions of the live slots in an unpadded sequence of n_tokens."""
+    return [n_tokens - 1 - j for j in range(min(n_slots, n_tokens))]
+
+
+def intervention_for(layer: int, delta: Tensor | None,
+                     n_tokens: int | None = None) -> Intervention | None:
     if delta is None:
         return None
-    return Intervention(layer=layer, delta=delta, positions="index", index=-1)
+    if delta.dim() == 1:
+        return Intervention(layer=layer, delta=delta, positions="index", index=-1)
+    if n_tokens is None:
+        raise ValueError("a multi-position delta needs the prompt length")
+    # slots past the front of a short prompt are DROPPED, not clamped: clamping puts
+    # two of them on token 0, and an advanced-index += keeps only the last write
+    live = len(injected_positions(delta.shape[0], n_tokens))
+    dead = delta[live:]
+    if dead.numel() and float(dead.abs().max()) > 0:
+        raise SystemExit(f"{dead.shape[0]} slot(s) fall past the start of a "
+                         f"{n_tokens}-token prompt and are not zero; the two stages "
+                         "disagree about how many positions were attacked")
+    index = torch.arange(-1, -live - 1, -1).unsqueeze(0)
+    return Intervention(layer=layer, delta=delta[:live].unsqueeze(0),
+                        positions="index", index=index)
 
 
 def sanity(token_ids, clean_states, deltas, stage1, constraint, inj_layer, tol=0.02):
@@ -113,11 +152,20 @@ def sanity(token_ids, clean_states, deltas, stage1, constraint, inj_layer, tol=0
         delta = deltas.get((constraint, "pgd", i))
         if row is None or delta is None:
             continue
-        got = float(clean_states[i][inj_layer][-1].norm())
-        worst_norm = max(worst_norm, abs(got - row["h_norm"]) / max(row["h_norm"], 1e-12))
+        n = int(ids.shape[0])
+        at = injected_positions(delta.shape[0] if delta.dim() > 1 else 1, n)
+        if row.get("inject_at") is not None and row["inject_at"][:len(at)] != at:
+            raise SystemExit(
+                f"sanity: prompt {i} was attacked at {row['inject_at'][:len(at)]} in "
+                f"stage 1 but resolves to {at} here; the two stages disagree about "
+                "where the perturbation goes")
+        want = (row.get("h_norm_by_position") or [row["h_norm"]])[:len(at)]
+        for pos, w in zip(at, want):
+            got = float(clean_states[i][inj_layer][pos].norm())
+            worst_norm = max(worst_norm, abs(got - w) / max(w, 1e-12))
         if inj_layer > 1:
             steered = capture_layers(ids, [inj_layer - 1],
-                                     intervention_for(inj_layer, delta))
+                                     intervention_for(inj_layer, delta, n))
             diff = (steered[inj_layer - 1] - clean_states[i][inj_layer - 1]).abs().max()
             worst_below = max(worst_below, float(diff))
         checked += 1
@@ -175,7 +223,7 @@ def main():
             score(args, sipit_dir, out_dir, rows_path, cal)
         return
 
-    inj_layer, stored_budget, deltas = load_deltas(args.deltas)
+    inj_layer, stored_budget, n_positions, deltas = load_deltas(args.deltas)
     budget = args.budget if args.budget is not None else stored_budget
     stage1 = stage1_rows(args.deltas)
     arms = [a for a in args.arms.split(",") if a]
@@ -185,8 +233,8 @@ def main():
     model, tokenizer = load_model(args.model_name, dtype=dtype, device=args.device)
     n_layers = model.config.num_hidden_layers + 1
     logger.info("model on %s, %s, rel_tol %g | injection layer %d, budget %g, "
-                "objective %s", model_device(), args.dtype, rel_tol, inj_layer,
-                budget, args.objective)
+                "%d position(s), objective %s", model_device(), args.dtype, rel_tol,
+                inj_layer, budget, n_positions, args.objective)
     if inj_layer >= n_layers - 1:
         raise SystemExit(f"injection layer {inj_layer} is the final block; the "
                          "model's own norm sits between it and the table")
@@ -231,7 +279,10 @@ def main():
     if rows_path.exists():
         for line in rows_path.read_text().splitlines():
             r = json.loads(line)
-            done.add((r["objective"], r["budget"], r["arm"], r["prompt_index"], r["layer"]))
+            done.add((r.get("behavior", "sentiment"), r.get("test_arm", ""),
+                      r["objective"], positions_key(r["arm"], r.get("n_positions", 1)),
+                      r["constraint"], r["budget"], r["arm"], r["prompt_index"],
+                      r["layer"]))
         logger.info("resuming: %d rows already on disk", len(done))
 
     cells = [(CLEAN_ARM, 0.0, all_layers)] + [(a, budget, steered_layers) for a in arms]
@@ -239,8 +290,10 @@ def main():
     with rows_path.open("a") as sink:
         for arm, cell_budget, layers in cells:
             okey = objective_key(arm, args.objective)
+            mkey = positions_key(arm, n_positions)
             todo = [l for l in layers
-                    if any((okey, cell_budget, arm, i, l) not in done
+                    if any((behavior.name, arm_name, okey, mkey, args.constraint,
+                            cell_budget, arm, i, l) not in done
                            for i in range(len(prompts)))]
             if not todo:
                 logger.info("%-7s already complete", arm)
@@ -251,31 +304,44 @@ def main():
                     captured[i], logits[i] = clean_states[i], clean_logits[i]
                     rel_dev[i] = {l: 0.0 for l in todo}
                     continue
-                iv = intervention_for(inj_layer, deltas[(args.constraint, arm, i)])
+                iv = intervention_for(inj_layer, deltas[(args.constraint, arm, i)],
+                                      int(ids.shape[0]))
                 captured[i] = capture_layers(ids, todo, iv)
                 logits[i] = read_logits(ids, iv)
                 # the same quantity stage 1 constrained, recomputed at the deployed
-                # precision: the transfer is measured rather than assumed
+                # precision: the transfer is measured rather than assumed. Max over
+                # the injected positions, which is what the constraint capped.
+                at = injected_positions(n_positions, int(ids.shape[0]))
                 rel_dev[i] = {}
                 for l in todo:
-                    ref = clean_states[i][l][-1]
-                    rel_dev[i][l] = float((captured[i][l][-1] - ref).norm()
-                                          / ref.norm().clamp_min(1e-12))
+                    ref = clean_states[i][l][at]
+                    rel_dev[i][l] = float(((captured[i][l][at] - ref).norm(dim=-1)
+                                           / ref.norm(dim=-1).clamp_min(1e-12)).max())
             for layer in todo:
                 vocab_layer = sipit.load_vocab_layer(vocab_table, layer, layout)
                 for i in captured:
-                    if (okey, cell_budget, arm, i, layer) in done:
+                    if (behavior.name, arm_name, okey, mkey, args.constraint,
+                            cell_budget, arm, i, layer) in done:
                         continue
                     gold = token_ids[i].tolist()
                     t0 = time.time()
                     steps = sipit.sipit(captured[i][layer], layer, vocab_layer,
                                         rel_tol=rel_tol, stop_on_fail=True, gold=gold)
-                    inj_pos = len(gold) - 1
-                    at_inj = steps[inj_pos] if len(steps) > inj_pos else steps[-1]
+                    inj_pos = injected_positions(n_positions, len(gold))
+                    inj_steps = [steps[q] for q in inj_pos if q < len(steps)] or [steps[-1]]
+                    # the worst injected position: what a k=1 detector reads, and the
+                    # floor on what any top-k mean over them can read
+                    at_inj = max(inj_steps, key=lambda x: x["residual"] / max(x["h_norm"], 1e-12)
+                                 if x.get("h_norm") else 0.0)
                     s1 = stage1.get((args.constraint, arm, i), {})
                     row = {
                         "id": f"{args.behavior}_{i:03d}", "prompt_index": i,
                         "arm": arm, "objective": okey, "budget": cell_budget,
+                        "n_positions": mkey,
+                        # the prompt SET is part of the cell: a clean control fitted on
+                        # 7-token sentiment fragments is not the control for 40-token
+                        # chat-templated jailbreak prompts
+                        "behavior": behavior.name, "test_arm": arm_name,
                         "constraint": args.constraint, "inj_layer": inj_layer,
                         "layer": layer, "n_target": len(gold), "n_recovered": len(steps),
                         "exact": [s["token"] for s in steps] == gold[:len(steps)],
@@ -283,7 +349,11 @@ def main():
                                              if at_inj.get("h_norm") else None),
                         # the crude rel_tol oracle's verdict, free, so a trajectory-rule
                         # detection is never confused with a tolerance detection
-                        "inj_matched": bool(at_inj["matched"]),
+                        "inj_matched": all(bool(x["matched"]) for x in inj_steps),
+                        "n_injected": len(inj_pos),
+                        "inj_rel_residual_by_position": [
+                            x["residual"] / x["h_norm"] if x.get("h_norm") else None
+                            for x in inj_steps],
                         "rel_dev_fp16": rel_dev[i][layer],
                         "rel_dev_fp32": (s1.get("rel_dev_by_layer") or {}).get(str(layer)),
                         "flip_fp16": int(logits[i].argmax() != clean_logits[i].argmax()),
@@ -314,7 +384,10 @@ def score(args, sipit_dir: Path, out_dir: Path, rows_path: Path, calibration: st
     rows = [json.loads(l) for l in rows_path.read_text().splitlines()]
     cells = {}
     for r in rows:
-        cells.setdefault((r["objective"], r["budget"], r["arm"]), []).append(r)
+        cells.setdefault((r.get("behavior", "sentiment"), r.get("test_arm", ""),
+                          r["objective"],
+                          positions_key(r["arm"], r.get("n_positions", 1)),
+                          r["constraint"], r["budget"], r["arm"]), []).append(r)
 
     def profiles_of(cell_rows):
         prof = {}
@@ -324,10 +397,14 @@ def score(args, sipit_dir: Path, out_dir: Path, rows_path: Path, calibration: st
                 prof.setdefault(r["prompt_index"], {})[r["layer"]] = detect.topk_mean(res, k)
         return prof
 
-    control = profiles_of(cells.get((SHARED, 0.0, CLEAN_ARM), []))
+    # the clean control must come from the SAME prompt set: a control fitted on 7-token
+    # sentiment fragments is not the control for 40-token chat-templated jailbreaks
+    controls = {ck[:2]: profiles_of(v) for ck, v in cells.items() if ck[-1] == CLEAN_ARM}
 
     summary = []
-    for (obj, budget, arm), cell_rows in sorted(cells.items()):
+    for key, cell_rows in sorted(cells.items()):
+        beh, beh_arm, obj, m, scope, budget, arm = key
+        control = controls.get((beh, beh_arm), {})
         L = cell_rows[0]["inj_layer"]
         prof = profiles_of(cell_rows)
         if arm != CLEAN_ARM:
@@ -335,7 +412,11 @@ def score(args, sipit_dir: Path, out_dir: Path, rows_path: Path, calibration: st
                 for layer in layers:
                     if layer < L and layer in control.get(pid, {}):
                         prof[pid].setdefault(layer, control[pid][layer])
-        entry = {"objective": obj, "budget": budget, "arm": arm, "inj_layer": L}
+        entry = {"behavior": beh, "test_arm": beh_arm, "objective": obj,
+                 "budget": budget, "arm": arm, "inj_layer": L,
+                 "constraint": scope, "n_positions": m,
+                 "n_injected_mean": (sum(r.get("n_injected", 1) for r in cell_rows)
+                                     / max(1, len(cell_rows)))}
         entry.update(steered_sipit.summarize_cell(prof, L, stats, layers, cal,
                                                   operating_points))
         at_inj = [r for r in cell_rows if r["layer"] == L]
@@ -363,14 +444,17 @@ def score(args, sipit_dir: Path, out_dir: Path, rows_path: Path, calibration: st
 
     logger.info("scored against %s (k=%d), bank FPR %.0f%% at the shipped point",
                 calibration, k, 100 * operating_points["shipped"]["fpr_clean"])
-    logger.info("%-9s %7s %-7s %3s | %7s %10s %10s | %8s %7s | %9s %8s %6s %6s",
-                "objective", "budget", "arm", "n", "TPR", "sigma5run3", "sigma4run6",
-                "inj hit", "med s/t", "realized", "shift", "flip16", "flip32")
+    logger.info("%-13s %-9s %-9s %7s %-7s %3s %3s | %7s %10s %10s | %8s %7s | "
+                "%9s %8s %6s %6s",
+                "behavior", "objective", "scope", "budget", "arm", "m", "n", "TPR",
+                "sigma5run3", "sigma4run6", "inj hit", "med s/t", "realized", "shift",
+                "flip16", "flip32")
     for e in summary:
         tag = "   <- FPR, this distribution" if e["arm"] == CLEAN_ARM else ""
-        logger.info("%-9s %7g %-7s %3d | %6.0f%% %9.0f%% %9.0f%% | %7.0f%% %7.2f | "
-                    "%9.2e %8.1e %5.0f%% %6s%s",
-                    e["objective"], e["budget"], e["arm"], e["n"],
+        logger.info("%-13s %-9s %-9s %7g %-7s %3d %3d | %6.0f%% %9.0f%% %9.0f%% | "
+                    "%7.0f%% %7.2f | %9.2e %8.1e %5.0f%% %6s%s",
+                    e["behavior"], e["objective"], e["constraint"], e["budget"],
+                    e["arm"], e["n_positions"], e["n"],
                     100 * e["tpr_shipped"], 100 * e["tpr_sigma5_run3"],
                     100 * e["tpr_sigma4_run6"], 100 * e["inj_layer_hit_rate"],
                     e["inj_score_over_threshold_median"],
