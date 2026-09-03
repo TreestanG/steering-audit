@@ -62,7 +62,98 @@ def load_trajectories(layers_dir: Path) -> list[dict]:
     return rows
 
 
-def score_rows(rows: list[dict], k: int) -> list[dict]:
+
+CONTENT_SCHEMES = ("pooled", "end")
+TRANSFORMS = ("none", "log")
+SD_FLOOR_RAW = 1e-5
+SD_FLOOR_LOG = 0.05
+
+
+def position_roles(tokens: list[int], chat_ids: tuple[int, int] | None,
+                   content_scheme: str = "pooled", end_cap: int = 6) -> list[str]:
+    n = len(tokens)
+
+    def plain(i: int) -> str:
+        if content_scheme == "end":
+            return f"content_e{min(n - 1 - i, end_cap)}"
+        return "content"
+
+    if not chat_ids:
+        return [plain(i) for i in range(n)]
+    start_id, end_id = chat_ids
+    starts = [i for i, t in enumerate(tokens) if t == start_id]
+    ends = [i for i, t in enumerate(tokens) if t == end_id]
+    if len(starts) < 2 or len(ends) < 2:
+        return [plain(i) for i in range(n)]
+    c0, c1 = starts[1] + 3, ends[1]   # after '<|im_start|>user\n'
+
+    def content_role(i: int) -> str:
+        # the edges of the user turn have their own clean distributions: the first
+        # content token sits +0.45 sd above pooled content, the second is the
+        # heaviest-tailed position in the sequence (max clean z 6.8), the last sits
+        # -0.8 sd below. Pooling them is what made the k=1 clean tail heavy.
+        if i == c0:
+            return "content_first"
+        if i == c0 + 1:
+            return "content_second"
+        if i == c1 - 1:
+            return "content_last"
+        return plain(i)
+
+    return [f"pre{i}" if i < c0 else (content_role(i) if i < c1 else f"suf{i - n}")
+            for i in range(n)]
+
+
+def _transform(x: float, transform: str) -> float | None:
+    if transform == "log":
+        return math.log(x) if x > 0 else None
+    return x
+
+
+def _role_inputs(row: dict, chat_ids, content_scheme: str = "pooled",
+                 end_cap: int = 6) -> tuple[list[float], list[str]]:
+    steps = [s for s in row.get("steps", []) if s.get("h_norm")]
+    return ([s["residual"] / s["h_norm"] for s in steps],
+            position_roles([s["token"] for s in steps], chat_ids, content_scheme, end_cap))
+
+
+def fit_role_stats(rows: list[dict], chat_ids, sd_floor: float, transform: str = "none",
+                   content_scheme: str = "pooled", end_cap: int = 6) -> dict:
+    acc: dict[tuple[int, str], list[float]] = {}
+    for row in rows:
+        for x, role in zip(*_role_inputs(row, chat_ids, content_scheme, end_cap)):
+            v = _transform(x, transform)
+            if v is not None:
+                acc.setdefault((row["layer"], role), []).append(v)
+    out: dict[str, dict] = {}
+    for (layer, role), v in acc.items():
+        sd = statistics.stdev(v) if len(v) > 1 else 0.0
+        out.setdefault(str(layer), {})[role] = {
+            "n": len(v), "mean": statistics.fmean(v), "sd": max(sd, sd_floor)}
+    return out
+
+
+def role_z_score(row: dict, cal: dict, k: int) -> float:
+    transform = cal.get("transform", "none")
+    res, roles = _role_inputs(row, tuple(cal["chat_ids"]),
+                              cal.get("content_scheme", "pooled"), cal.get("end_cap", 6))
+    st = cal["role_stats"].get(str(row["layer"]), {})
+    z = []
+    for x, r in zip(res, roles):
+        v = _transform(x, transform)
+        if r in st and v is not None:
+            z.append((v - st[r]["mean"]) / st[r]["sd"])
+    return topk_mean(z, k) if z else float("nan")
+
+
+def row_score(row: dict, k: int, cal: dict | None = None) -> float:
+    if cal and cal.get("statistic") == "role_z":
+        return role_z_score(row, cal, k)
+    residuals = relative_residuals(row.get("steps", []))
+    return topk_mean(residuals, k) if residuals else float("nan")
+
+
+def score_rows(rows: list[dict], k: int, cal: dict | None = None) -> list[dict]:
     out = []
     for row in rows:
         residuals = relative_residuals(row.get("steps", []))
@@ -73,7 +164,7 @@ def score_rows(rows: list[dict], k: int) -> list[dict]:
             "category": row.get("category"),
             "layer": row["layer"],
             "n_steps": len(residuals),
-            "score": topk_mean(residuals, k),
+            "score": row_score(row, k, cal),
             "residuals": residuals,
             "fires_any": any_position_fires(row["steps"]),
         })
@@ -115,14 +206,6 @@ def longest_run(layers: list[int], fired: set[int]) -> int:
 
 def scan(profile: dict[int, float], stats: dict[int, LayerStat], layers: list[int],
          sigma: float, stride: int, dense_tail: int = 0) -> tuple[set[int], set[int]]:
-    """Coarse-to-fine layer scan. Returns (layers found firing, layers examined).
-
-    Looks at every stride-th layer, then walks outward from each hit while its
-    neighbours keep firing, which is what traces a run back to its injection point.
-    The last `dense_tail` layers are probed exhaustively instead: no run can reach
-    min_run there, clean residuals are largest there, and a stride that steps over
-    them leaves the deepest layers only partly seen.
-    """
     examined: set[int] = set()
     fired: set[int] = set()
     index = {layer: i for i, layer in enumerate(layers)}
@@ -158,9 +241,6 @@ def prompt_fpr(profiles: dict, stats: dict[int, LayerStat], layers: list[int], *
     for pid, profile in profiles.items():
         fired, visited = scan(profile, stats, layers, sigma, stride, dense_tail)
         run = longest_run(layers, fired)
-        # The lone clause reads layers the strided scan skipped, so its visits count
-        # toward the work: otherwise layers_examined_frac reports a saving the rule
-        # does not actually make.
         lone = False
         if math.isfinite(sigma_any):
             for layer in layers:
@@ -191,11 +271,6 @@ def tune_sigma(profiles: dict, stats: dict[int, LayerStat], layers: list[int], *
                target: float, min_run: int, stride: int, sigma_any: float,
                ratio: float, dense_tail: int = 0,
                lo: float = 0.0, hi: float = 15.0, iters: int = 40) -> float:
-    """Smallest sigma whose per-PROMPT false-positive rate is at or under target.
-
-    This is the whole point of tuning globally: applying a fixed per-layer sigma sets a
-    per-layer rate and lets the prompt-level rate fall where it may.
-    """
     for _ in range(iters):
         mid = (lo + hi) / 2
         got = prompt_fpr(profiles, stats, layers, sigma=mid, min_run=min_run,
@@ -221,7 +296,6 @@ def run_distribution(profiles: dict, stats: dict[int, LayerStat], layers: list[i
 # ------------------------------------------------------------- position axis cost
 
 def min_detectable(residuals: list[float], threshold: float, k: int) -> tuple[float, float]:
-    """Smallest injection this rule would catch: (one position, all-position factor)."""
     if not residuals or threshold <= 0:
         return float("nan"), float("nan")
     ke = min(k, len(residuals))
@@ -233,7 +307,6 @@ def min_detectable(residuals: list[float], threshold: float, k: int) -> tuple[fl
 
 def sensitivity(scored: list[dict], stats: dict[int, LayerStat], k: int,
                 sigma: float) -> dict:
-    """What choosing k costs, as the smallest injection that still crosses the threshold."""
     ones, mults = [], []
     for row in scored:
         stat = stats.get(row["layer"])
@@ -293,15 +366,59 @@ def main():
                              "one steered position and for an all-position steer. This is "
                              "what choosing k costs")
     parser.add_argument("--slug", type=str, default=None, help="one model directory only")
+    parser.add_argument("--statistic", type=str, default="topk", choices=("topk", "role_z"),
+                        help="role_z: z-score each position against its own clean "
+                             "(layer, role) distribution before the top-k -- required "
+                             "on chat-templated input, where raw top-k is a statistic "
+                             "of the template (see position_roles)")
+    parser.add_argument("--chat_model", type=str, default=None,
+                        help="tokenizer whose <|im_start|>/<|im_end|> ids delimit the "
+                             "template for --statistic role_z")
+    parser.add_argument("--transform", type=str, default="none", choices=TRANSFORMS,
+                        help="role_z: z-score the residual (none) or its log (log). log "
+                             "removes the right skew behind the heavy k=1 tail: bare-text "
+                             "k=1 FPR 38%% -> 7%% at sigma 3 (D2, 3 Sep 2026)")
+    parser.add_argument("--content_roles", type=str, default="pooled",
+                        choices=CONTENT_SCHEMES,
+                        help="role_z: pool all content positions (pooled) or give the "
+                             "last --end_cap positions their own baseline by offset from "
+                             "the end (end). end restores single-position sensitivity "
+                             "under log: pgd 0.0043 caught 0%% pooled, 100%% end")
+    parser.add_argument("--end_cap", type=int, default=6)
+    parser.add_argument("--sd_floor", type=float, default=None,
+                        help="role_z: floor on a role's clean sd; prefix template "
+                             "positions are deterministic and would otherwise divide by 0")
+    parser.add_argument("--layers_subdir", type=str, default="layers",
+                        help="which */sipit/<subdir> holds the clean trajectories")
     parser.add_argument("--out_name", type=str, default="detector_calibration.json")
     parser.add_argument("--no_write", action="store_true")
     add_logging_args(parser)
     args = parser.parse_args()
     log_setup(args, default_log=args.results_root / "all" / "logs" / "detect.log")
+    if args.sd_floor is None:
+        args.sd_floor = SD_FLOOR_LOG if args.transform == "log" else SD_FLOOR_RAW
 
-    dirs = sorted(p for p in args.results_root.glob("*/sipit/layers") if p.is_dir())
+    chat_ids = None
+    if args.statistic == "role_z":
+        if not args.chat_model:
+            raise SystemExit("--statistic role_z needs --chat_model for the template ids")
+        from transformers import AutoTokenizer
+        tk = AutoTokenizer.from_pretrained(args.chat_model)
+        chat_ids = (tk.convert_tokens_to_ids("<|im_start|>"),
+                    tk.convert_tokens_to_ids("<|im_end|>"))
+    dirs = sorted(p for p in args.results_root.glob(f"*/sipit/{args.layers_subdir}")
+                  if p.is_dir())
+
+    def slug_of(layers_dir: Path) -> str:
+        # the model slug is the component before 'sipit', however deep the
+        # trajectories sit under it (layers/ or chat_bank/layers/)
+        return layers_dir.parts[layers_dir.parts.index("sipit") - 1]
+
+    def sipit_dir_of(layers_dir: Path) -> Path:
+        return Path(*layers_dir.parts[:layers_dir.parts.index("sipit") + 1])
+
     if args.slug:
-        dirs = [p for p in dirs if p.parts[-3] == args.slug]
+        dirs = [p for p in dirs if slug_of(p) == args.slug]
     if not dirs:
         raise SystemExit(f"no */sipit/layers under {args.results_root}")
 
@@ -315,8 +432,25 @@ def main():
                 "sigma", "FPR/prompt", "FPR/layer", "mean run", "scanned")
 
     for layers_dir in dirs:
-        slug = layers_dir.parts[-3]
-        scored = score_rows(load_trajectories(layers_dir), args.k)
+        slug = slug_of(layers_dir)
+        traj = load_trajectories(layers_dir)
+        role_cal = None
+        if args.statistic == "role_z":
+            role_cal = {"statistic": "role_z", "chat_ids": list(chat_ids),
+                        "transform": args.transform, "content_scheme": args.content_roles,
+                        "end_cap": args.end_cap,
+                        "role_stats": fit_role_stats(traj, chat_ids, args.sd_floor,
+                                                     args.transform, args.content_roles,
+                                                     args.end_cap)}
+            n_roles = sum(len(d) for d in role_cal["role_stats"].values())
+            at_floor = sum(1 for d in role_cal["role_stats"].values() for v in d.values()
+                           if v["sd"] <= args.sd_floor * (1 + 1e-9))
+            if at_floor:
+                logger.warning("%s: %d/%d (layer, role) cells sit at the sd floor %g; "
+                               "those roles are deterministic in the fit set and any "
+                               "drift there is read as (drift / floor) sigma", slug,
+                               at_floor, n_roles, args.sd_floor)
+        scored = score_rows(traj, args.k, role_cal)
         if not scored:
             continue
         profiles, categories, layers = build_profiles(scored)
@@ -324,6 +458,9 @@ def main():
             logger.warning("%s: layers %s are not contiguous, so --min_run counts "
                            "adjacency in this list rather than in depth", slug, layers)
         stats = layer_stats(scored, args.calibrate_on)
+        if role_cal is not None:
+            # z is already normalised per (layer, role): threshold the top-k z at sigma
+            stats = {layer: LayerStat(st.n, 0.0, 1.0) for layer, st in stats.items()}
         if not stats:
             continue
 
@@ -355,6 +492,12 @@ def main():
         if not args.no_write:
             payload = {
                 "k": args.k, "sigma": sigma, "sigma_any": sigma * ratio,
+                "statistic": args.statistic,
+                **({"chat_ids": role_cal["chat_ids"], "sd_floor": args.sd_floor,
+                    "transform": args.transform, "content_scheme": args.content_roles,
+                    "end_cap": args.end_cap,
+                    "role_stats": role_cal["role_stats"],
+                    "fit_layers_dir": str(layers_dir)} if role_cal else {}),
                 "min_run": args.min_run,
                 "stride": args.stride, "dense_tail": args.dense_tail,
                 "calibrated_on": args.calibrate_on,
@@ -369,7 +512,8 @@ def main():
                                            "threshold": s.threshold(sigma)}
                               for layer, s in stats.items()},
             }
-            (layers_dir.parent / args.out_name).write_text(json.dumps(payload, indent=2) + "\n")
+            (sipit_dir_of(layers_dir) / args.out_name).write_text(
+                json.dumps(payload, indent=2) + "\n")
 
     if not args.no_write:
         logger.info("wrote %s per model", args.out_name)
