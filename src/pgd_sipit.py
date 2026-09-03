@@ -267,7 +267,13 @@ def main():
                     for i, ids in enumerate(token_ids)}
     clean_logits = {i: read_logits(ids, None) for i, ids in enumerate(token_ids)}
 
-    sanity(token_ids, clean_states, deltas, stage1, args.constraint, inj_layer)
+    if arms:
+        sanity(token_ids, clean_states, deltas, stage1, args.constraint, inj_layer)
+    else:
+        # --arms "" is clean-only: no delta is applied, so there is nothing for the
+        # position/invariance checks to verify. Used to build a clean trajectory set
+        # for calibration on a prompt distribution the bank does not cover.
+        logger.info("no attack arms: clean trajectories only, sanity checks skipped")
     if args.sanity_only:
         return
 
@@ -378,7 +384,7 @@ def score(args, sipit_dir: Path, out_dir: Path, rows_path: Path, calibration: st
     cal, stats, layers = steered_sipit.load_calibration(sipit_dir, calibration)
     k = cal["k"]
 
-    bank = steered_sipit.bank_clean_scores(sipit_dir, k)
+    bank = steered_sipit.bank_clean_scores(sipit_dir, k, cal)
     operating_points = steered_sipit.build_operating_points(cal, bank, stats, layers)
 
     rows = [json.loads(l) for l in rows_path.read_text().splitlines()]
@@ -392,9 +398,9 @@ def score(args, sipit_dir: Path, out_dir: Path, rows_path: Path, calibration: st
     def profiles_of(cell_rows):
         prof = {}
         for r in cell_rows:
-            res = detect.relative_residuals(r["steps"])
-            if res:
-                prof.setdefault(r["prompt_index"], {})[r["layer"]] = detect.topk_mean(res, k)
+            score = detect.row_score(r, k, cal)
+            if score == score:   # not NaN
+                prof.setdefault(r["prompt_index"], {})[r["layer"]] = score
         return prof
 
     # the clean control must come from the SAME prompt set: a control fitted on 7-token
@@ -442,8 +448,9 @@ def score(args, sipit_dir: Path, out_dir: Path, rows_path: Path, calibration: st
             max(abs(a - b) / b for a, b in dev) if dev else float("nan"))
         summary.append(entry)
 
-    logger.info("scored against %s (k=%d), bank FPR %.0f%% at the shipped point",
-                calibration, k, 100 * operating_points["shipped"]["fpr_clean"])
+    logger.info("scored against %s (k=%d, %s), bank FPR %.0f%% at the shipped point",
+                calibration, k, cal.get("statistic", "topk"),
+                100 * operating_points["shipped"]["fpr_clean"])
     logger.info("%-13s %-9s %-9s %7s %-7s %3s %3s | %7s %10s %10s | %8s %7s | "
                 "%9s %8s %6s %6s",
                 "behavior", "objective", "scope", "budget", "arm", "m", "n", "TPR",

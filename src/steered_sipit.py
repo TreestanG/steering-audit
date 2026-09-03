@@ -278,9 +278,9 @@ def load_calibration(sipit_dir: Path, name: str = DEFAULT_CALIBRATION):
     return cal, stats, sorted(stats)
 
 
-def bank_clean_scores(sipit_dir: Path, k: int) -> dict:
+def bank_clean_scores(sipit_dir: Path, k: int, cal: dict | None = None) -> dict:
     out: dict[str, dict[int, float]] = {}
-    for s in detect.score_rows(detect.load_trajectories(sipit_dir / "layers"), k):
+    for s in detect.score_rows(detect.load_trajectories(sipit_dir / "layers"), k, cal):
         out.setdefault(s["id"], {})[s["layer"]] = s["score"]
     return out
 
@@ -333,7 +333,7 @@ def score(args, sipit_dir: Path, rows_path: Path,
           calibration: str = DEFAULT_CALIBRATION):
     cal, stats, layers = load_calibration(sipit_dir, calibration)
     k = cal["k"]
-    clean_score = bank_clean_scores(sipit_dir, k)
+    clean_score = bank_clean_scores(sipit_dir, k, cal)
 
     rows = [json.loads(l) for l in rows_path.read_text().splitlines()]
     cells = {}
@@ -346,10 +346,10 @@ def score(args, sipit_dir: Path, rows_path: Path,
     for (arm, L, f), cell_rows in sorted(cells.items()):
         profiles = {}
         for r in cell_rows:
-            res = detect.relative_residuals(r["steps"])
-            if not res:
+            score = detect.row_score(r, k, cal)
+            if score != score:
                 continue
-            profiles.setdefault(r["id"], {})[r["layer"]] = detect.topk_mean(res, k)
+            profiles.setdefault(r["id"], {})[r["layer"]] = score
         for pid in profiles:
             for layer in layers:
                 if layer < L and layer in clean_score.get(pid, {}):
