@@ -233,6 +233,195 @@ def candidate_states(cache, prefix_len: int, candidates: Tensor, layer: int) -> 
         handle.remove()
 
 
+@torch.no_grad()
+def candidate_states_multi(cache, prefix_len: int, candidates: Tensor,
+                           layers: list[int]) -> dict[int, Tensor]:
+    """candidate_states at several layers from ONE forward, exiting after the deepest.
+
+    The pass through block L is the same computation whether it exits there or is
+    read on the way to a deeper block, so each layer's states are the ones its own
+    scan would have produced. {layer: [n_cands, hidden]}
+    """
+    model, _ = require_model()
+    device = next(model.parameters()).device
+    n = candidates.shape[0]
+    out: dict[int, Tensor] = {}
+    if 0 in layers:
+        h = model.get_input_embeddings()(candidates.to(device))
+        pos = abs_position_embedding()
+        if pos is not None:
+            h = h + pos.weight[prefix_len].to(h.dtype)
+        out[0] = h.float().cpu()
+    deep = sorted(l for l in layers if l > 0)
+    if not deep:
+        return out
+    deepest = deep[-1]
+    batch_cache = copy.deepcopy(cache)
+    batch_cache.batch_repeat_interleave(n)
+    blocks = get_decoder_layers()
+    grabbed: dict[int, Tensor] = {}
+
+    def grab_for(layer: int):
+        def grab(module, args, output):
+            grabbed[layer] = output[0] if isinstance(output, tuple) else output
+            if layer == deepest:
+                raise _EarlyExit(grabbed[layer])
+        return grab
+
+    handles = [blocks[l - 1].register_forward_hook(grab_for(l)) for l in deep]
+    try:
+        get_base_model()(
+            input_ids=candidates.view(-1, 1).to(device),
+            attention_mask=torch.ones(n, prefix_len + 1, dtype=torch.long, device=device),
+            past_key_values=batch_cache,
+        )
+        raise RuntimeError(f"layer {deepest} hook never fired — is layer <= n_layers?")
+    except _EarlyExit:
+        for l in deep:
+            out[l] = apply_final_norm(grabbed[l][:, 0], l).float().cpu()
+    finally:
+        for h in handles:
+            h.remove()
+    return out
+
+
+@torch.no_grad()
+def prefix_cache(tokens: list[int]):
+    """Cache and next-token logits after encoding tokens one at a time -- the same
+    steps the scan takes, so a continuation from here is what a full run produces."""
+    cache, hidden_last = None, None
+    for q, tok in enumerate(tokens):
+        cache, hidden_last = encode_step(torch.tensor([[tok]]), cache=cache, attn_len=q + 1)
+    return cache, next_token_logits(hidden_last)
+
+
+@torch.no_grad()
+def solve_position_multi(
+    cache,
+    prefix_len: int,
+    logits: Tensor,
+    targets: dict[int, Tensor],
+    *,
+    rel_tol: float,
+    abs_tol: float,
+    schedule: tuple[int, ...],
+    exhaustive: bool,
+    gold: int | None = None,
+) -> dict[int, dict]:
+    """solve_position at several layers of one position from a single candidate scan.
+
+    The candidate order and batch boundaries depend only on the prefix, so every
+    layer sees exactly the batches its own scan would have seen and closes on the
+    batch it would have closed on; a layer that never matches goes exhaustive. Each
+    batch is one forward through the deepest layer still open.
+    """
+    model, _ = require_model()
+    vocab_size = int(model.config.vocab_size)
+    order = torch.argsort(logits[:vocab_size], descending=True)
+    tol = {l: match_tol(t, rel_tol, abs_tol) for l, t in targets.items()}
+    top2 = {l: Top2() for l in targets}
+    tried = {l: 0 for l in targets}
+    open_layers = set(targets)
+    start = 0
+    for size in batch_sizes(schedule, vocab_size, prefix_len):
+        if start >= vocab_size or not open_layers:
+            break
+        end = min(start + size, vocab_size)
+        cands = order[start:end]
+        states = candidate_states_multi(cache, prefix_len, cands, sorted(open_layers))
+        for l in sorted(open_layers):
+            d = (states[l] - targets[l]).norm(dim=1)
+            tried[l] += cands.shape[0]
+            top2[l].update(d, cands)
+            if top2[l].best <= tol[l] and not exhaustive:
+                open_layers.discard(l)
+        start = end
+    return {l: _step(top2[l], tol=tol[l], h_norm=float(targets[l].norm()), tried=tried[l],
+                     exhaustive=tried[l] >= vocab_size, gold=gold) for l in targets}
+
+
+@torch.no_grad()
+def sipit_multi(
+    targets: dict[int, Tensor],
+    vocab_layer_for,
+    *,
+    rel_tol: float = 1e-3,
+    abs_tol: float = 0.0,
+    schedule: tuple[int, ...] = DEFAULT_SCHEDULE,
+    exhaustive: bool = False,
+    stop_on_fail: bool = True,
+    gold: list[int] | None = None,
+) -> tuple[dict[int, list[dict]], set[int]]:
+    """sipit() at several layers of ONE sequence from a shared scan.
+
+    Every layer's cache is built from the tokens it recovered, and while the layers
+    agree on those tokens the cache, the candidate order and the batch boundaries
+    are identical, so each position is solved for all still-open layers by one
+    forward per batch (solve_position_multi). A layer stops where its own scan
+    would have stopped. A layer that recovers a DIFFERENT token from the others is
+    dropped from the shared scan; its steps so far are returned as a valid prefix
+    and the caller finishes it with sipit(known_steps=...). Returns (steps per
+    layer, the set of layers that diverged).
+    """
+    layers = sorted(targets)
+    seq_len = int(next(iter(targets.values())).shape[0])
+    if any(int(t.shape[0]) != seq_len for t in targets.values()):
+        raise ValueError("sipit_multi: every layer's target must cover the same positions")
+
+    def gold_at(t: int) -> int | None:
+        return gold[t] if gold is not None and t < len(gold) else None
+
+    steps: dict[int, list[dict]] = {}
+    for l in layers:
+        table = vocab_layer_for(l)
+        top2 = Top2()
+        top2.update(dists_to(targets[l][0], table), torch.arange(table.shape[0]))
+        steps[l] = [_step(top2, tol=match_tol(targets[l][0], rel_tol, abs_tol),
+                          h_norm=float(targets[l][0].norm()), tried=table.shape[0],
+                          exhaustive=True, gold=gold_at(0))]
+        del table
+    open_layers = {l for l in layers if not (stop_on_fail and not steps[l][0]["matched"])}
+    diverged: set[int] = set()
+    if seq_len == 1 or not open_layers:
+        return steps, diverged
+
+    def split_on_token(t: int) -> int | None:
+        ref = steps[min(open_layers)][t]["token"]
+        for l in sorted(open_layers):
+            if steps[l][t]["token"] != ref:
+                open_layers.discard(l)
+                diverged.add(l)
+        return ref
+
+    token = split_on_token(0)
+    cache, hidden_last = encode_step(torch.tensor([[token]]), cache=None, attn_len=1)
+    logits = next_token_logits(hidden_last)
+    prefix_len = 1
+    for t in range(1, seq_len):
+        if not open_layers:
+            break
+        res = solve_position_multi(
+            cache, prefix_len, logits, {l: targets[l][t] for l in open_layers},
+            rel_tol=rel_tol, abs_tol=abs_tol, schedule=schedule, exhaustive=exhaustive,
+            gold=gold_at(t),
+        )
+        for l in sorted(open_layers):
+            steps[l].append(res[l])
+            if stop_on_fail and not res[l]["matched"]:
+                open_layers.discard(l)
+        if not open_layers:
+            break
+        token = split_on_token(t)
+        if not open_layers:
+            break
+        cache, hidden_last = encode_step(
+            torch.tensor([[token]]), cache=cache, attn_len=prefix_len + 1
+        )
+        logits = next_token_logits(hidden_last)
+        prefix_len += 1
+    return steps, diverged
+
+
 def _step(top2: Top2, *, tol: float, h_norm: float, tried: int, exhaustive: bool,
           gold: int | None = None) -> dict:
     """One position's result row, shared by the position-0 lookup and the vocab scan."""
@@ -312,13 +501,34 @@ def sipit(
     exhaustive: bool = False,
     stop_on_fail: bool = True,
     gold: list[int] | None = None,
+    known_steps: list[dict] | None = None,
 ) -> list[dict]:
-    """Recover the token sequence behind target [seq, hidden] at one layer."""
+    """Recover the token sequence behind target [seq, hidden] at one layer.
+
+    known_steps: rows already solved for positions 0..len-1 of this same sequence,
+    e.g. the clean inversion of a prefix that an intervention did not touch. They are
+    reused verbatim and the KV cache is rebuilt from their tokens by the same
+    one-token steps the scan takes, so the continuation is what a full run produces.
+    """
     steps: list[dict] = []
     n_vocab = vocab_layer.shape[0]
 
     def gold_at(t: int) -> int | None:
         return gold[t] if gold is not None and t < len(gold) else None
+
+    if known_steps:
+        steps = [dict(s) for s in known_steps[: target.shape[0]]]
+        if stop_on_fail:
+            for q, s in enumerate(steps):
+                if not s["matched"]:
+                    return steps[: q + 1]
+        if len(steps) >= target.shape[0]:
+            return steps
+        cache, logits = prefix_cache([s["token"] for s in steps])
+        prefix_len = len(steps)
+        return _continue(steps, cache, prefix_len, logits, target, layer, rel_tol=rel_tol,
+                         abs_tol=abs_tol, schedule=schedule, exhaustive=exhaustive,
+                         stop_on_fail=stop_on_fail, gold_at=gold_at)
 
     top2 = Top2()
     top2.update(dists_to(target[0], vocab_layer), torch.arange(n_vocab))
@@ -340,9 +550,16 @@ def sipit(
 
     cache, hidden_last = encode_step(torch.tensor([[token0]]), cache=None, attn_len=1)
     logits = next_token_logits(hidden_last)
-    prefix_len = 1
+    return _continue(steps, cache, 1, logits, target, layer, rel_tol=rel_tol,
+                     abs_tol=abs_tol, schedule=schedule, exhaustive=exhaustive,
+                     stop_on_fail=stop_on_fail, gold_at=gold_at)
 
-    for t in range(1, target.shape[0]):
+
+@torch.no_grad()
+def _continue(steps, cache, prefix_len, logits, target, layer, *, rel_tol, abs_tol,
+              schedule, exhaustive, stop_on_fail, gold_at) -> list[dict]:
+    """Solve positions len(steps).. given the cache and logits of the recovered prefix."""
+    for t in range(len(steps), target.shape[0]):
         step = solve_position(
             cache, prefix_len, logits, target[t], layer,
             rel_tol=rel_tol, abs_tol=abs_tol, schedule=schedule, exhaustive=exhaustive,
