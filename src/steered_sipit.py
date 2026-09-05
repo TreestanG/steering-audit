@@ -232,20 +232,42 @@ def main():
                     delta = unit_delta(rand, scale, f)
                 iv = Intervention(layer=L, delta=delta, positions="all")
                 captured[p["id"]] = capture_layers(token_ids[p["id"]], todo_layers, iv)
-            for layer in todo_layers:
-                vocab_layer = sipit.load_vocab_layer(vocab_table, layer, layout)
-                for p in prompts:
-                    if (arm, L, f, p["id"], layer) in done:
-                        continue
-                    gold = token_ids[p["id"]].tolist()
-                    t0 = time.time()
-                    steps = sipit.sipit(captured[p["id"]][layer], layer, vocab_layer,
-                                        rel_tol=rel_tol, stop_on_fail=True, gold=gold)
+            # One shared scan per prompt for every pending layer (sipit.sipit_multi):
+            # all-position steering changes every position, but the layers still
+            # recover the same tokens, so the cache and candidate order are shared and
+            # each batch is one forward through the deepest open layer. The position-0
+            # table slices are preloaded for the cell when they fit in memory.
+            slices: dict[int, Tensor] = {}
+            if len(todo_layers) * int(model.config.vocab_size) * hidden * 4 <= PRELOAD_BYTES:
+                slices = {l: sipit.load_vocab_layer(vocab_table, l, layout) for l in todo_layers}
+
+            def vocab_layer_for(l: int) -> Tensor:
+                return slices[l] if l in slices else sipit.load_vocab_layer(vocab_table, l, layout)
+
+            for p in prompts:
+                pending = [l for l in todo_layers if (arm, L, f, p["id"], l) not in done]
+                if not pending:
+                    continue
+                gold = token_ids[p["id"]].tolist()
+                t0 = time.time()
+                steps_by, diverged = sipit.sipit_multi(
+                    {l: captured[p["id"]][l] for l in pending}, vocab_layer_for,
+                    rel_tol=rel_tol, stop_on_fail=True, gold=gold)
+                for l in sorted(diverged):
+                    steps_by[l] = sipit.sipit(captured[p["id"]][l], l, vocab_layer_for(l),
+                                              rel_tol=rel_tol, stop_on_fail=True, gold=gold,
+                                              known_steps=steps_by[l])
+                per = (time.time() - t0) / len(pending)
+                for layer in pending:
+                    steps = steps_by[layer]
                     row = {
                         "id": p["id"], "category": p["category"], "arm": arm,
                         "inj_layer": L, "fraction": f, "layer": layer,
                         "n_target": len(gold), "n_recovered": len(steps),
-                        "elapsed": time.time() - t0,
+                        # this row came out of one scan shared by scan_layers layers;
+                        # elapsed is that scan's time split evenly
+                        "elapsed": per, "scan_layers": len(pending),
+                        "diverged": layer in diverged,
                         "steps": [{k: s[k] for k in ("token", "residual", "gap", "tol",
                                                      "h_norm", "tried", "matched",
                                                      "gold_token", "correct")
@@ -253,12 +275,16 @@ def main():
                     }
                     sink.write(json.dumps(row) + "\n")
                     sink.flush()
-                del vocab_layer
+                    done.add((arm, L, f, p["id"], layer))
+            slices.clear()
             logger.info("[%d/%d] %s L=%d f=%g done, %.0fs elapsed total",
                         c_i, len(cells), arm, L, f, time.time() - t_start)
 
     score(args, sipit_dir, rows_path, args.calibration)
 
+
+# position-0 table slices preloaded per cell (fp32) when under this many bytes
+PRELOAD_BYTES = 3_000_000_000
 
 DEFAULT_CALIBRATION = "detector_calibration.json"
 

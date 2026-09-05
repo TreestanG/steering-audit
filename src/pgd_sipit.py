@@ -120,6 +120,20 @@ def injected_positions(n_slots: int, n_tokens: int) -> list[int]:
     return [n_tokens - 1 - j for j in range(min(n_slots, n_tokens))]
 
 
+def clean_prefix(clean_steps: dict, behavior_name: str, arm_name: str, i: int, layer: int,
+                 gold: list[int], first_inj: int) -> list[dict] | None:
+    """The clean row's steps for the positions a prefill-only injection at the last m
+    positions cannot reach. The model is causal and the delta lands at prefill, so
+    those states are the clean ones at every layer and their inversion is the same."""
+    hit = clean_steps.get((behavior_name, arm_name, i, layer))
+    if hit is None or hit[0] != len(gold) or first_inj <= 0:
+        return None
+    prefix = hit[1][:first_inj]
+    if any(s.get("gold_token") != gold[q] for q, s in enumerate(prefix)):
+        return None
+    return prefix
+
+
 def intervention_for(layer: int, delta: Tensor | None,
                      n_tokens: int | None = None) -> Intervention | None:
     if delta is None:
@@ -208,6 +222,10 @@ def main():
                         default="detector_calibration.json,detector_calibration_k1.json")
     parser.add_argument("--sanity_only", action="store_true")
     parser.add_argument("--score_only", action="store_true")
+    parser.add_argument("--no_reuse_clean", action="store_true",
+                        help="re-invert every position of a steered prompt instead of "
+                             "reusing the clean row for the positions ahead of the "
+                             "injection, which the intervention cannot reach")
     add_logging_args(parser)
     args = parser.parse_args()
     log_setup(args, default_log=logs_dir(args.model_name) / "pgd_sipit.log")
@@ -282,6 +300,7 @@ def main():
         expect_model=args.model_name, expect_dtype=args.dtype)
 
     done = set()
+    clean_steps: dict[tuple, tuple[int, list[dict]]] = {}
     if rows_path.exists():
         for line in rows_path.read_text().splitlines():
             r = json.loads(line)
@@ -289,6 +308,10 @@ def main():
                       r["objective"], positions_key(r["arm"], r.get("n_positions", 1)),
                       r["constraint"], r["budget"], r["arm"], r["prompt_index"],
                       r["layer"]))
+            if r["arm"] == CLEAN_ARM:
+                clean_steps.setdefault((r.get("behavior", "sentiment"), r.get("test_arm", ""),
+                                        r["prompt_index"], r["layer"]),
+                                       (r["n_target"], r["steps"]))
         logger.info("resuming: %d rows already on disk", len(done))
 
     cells = [(CLEAN_ARM, 0.0, all_layers)] + [(a, budget, steered_layers) for a in arms]
@@ -323,55 +346,101 @@ def main():
                     ref = clean_states[i][l][at]
                     rel_dev[i][l] = float(((captured[i][l][at] - ref).norm(dim=-1)
                                            / ref.norm(dim=-1).clamp_min(1e-12)).max())
-            for layer in todo:
-                vocab_layer = sipit.load_vocab_layer(vocab_table, layer, layout)
+            def key(i: int, layer: int) -> tuple:
+                return (behavior.name, arm_name, okey, mkey, args.constraint, cell_budget,
+                        arm, i, layer)
+
+            def emit(i: int, layer: int, steps: list[dict], known, elapsed: float,
+                     scan_layers: int = 1) -> None:
+                gold = token_ids[i].tolist()
+                inj_pos = injected_positions(n_positions, len(gold))
+                inj_steps = [steps[q] for q in inj_pos if q < len(steps)] or [steps[-1]]
+                # the worst injected position: what a k=1 detector reads, and the
+                # floor on what any top-k mean over them can read
+                at_inj = max(inj_steps, key=lambda x: x["residual"] / max(x["h_norm"], 1e-12)
+                             if x.get("h_norm") else 0.0)
+                s1 = stage1.get((args.constraint, arm, i), {})
+                row = {
+                    "id": f"{args.behavior}_{i:03d}", "prompt_index": i,
+                    "arm": arm, "objective": okey, "budget": cell_budget,
+                    "n_positions": mkey,
+                    # the prompt SET is part of the cell: a clean control fitted on
+                    # 7-token sentiment fragments is not the control for 40-token
+                    # chat-templated jailbreak prompts
+                    "behavior": behavior.name, "test_arm": arm_name,
+                    "constraint": args.constraint, "inj_layer": inj_layer,
+                    "layer": layer, "n_target": len(gold), "n_recovered": len(steps),
+                    "exact": [s["token"] for s in steps] == gold[:len(steps)],
+                    "inj_rel_residual": (at_inj["residual"] / at_inj["h_norm"]
+                                         if at_inj.get("h_norm") else None),
+                    # the crude rel_tol oracle's verdict, free, so a trajectory-rule
+                    # detection is never confused with a tolerance detection
+                    "inj_matched": all(bool(x["matched"]) for x in inj_steps),
+                    "n_injected": len(inj_pos),
+                    "prefix_reused": len(known) if known else 0,
+                    # >1: this row's injected position came out of one candidate scan
+                    # shared by that many layers (elapsed is the scan time split evenly)
+                    "scan_layers": scan_layers,
+                    "inj_rel_residual_by_position": [
+                        x["residual"] / x["h_norm"] if x.get("h_norm") else None
+                        for x in inj_steps],
+                    "rel_dev_fp16": rel_dev[i][layer],
+                    "rel_dev_fp32": (s1.get("rel_dev_by_layer") or {}).get(str(layer)),
+                    "flip_fp16": int(logits[i].argmax() != clean_logits[i].argmax()),
+                    "flip_fp32": s1.get("flip"),
+                    "elapsed": elapsed,
+                    "steps": [{k: s[k] for k in ("token", "residual", "gap", "tol",
+                                                 "h_norm", "tried", "matched",
+                                                 "gold_token", "correct")
+                               if k in s} for s in steps],
+                }
+                sink.write(json.dumps(row) + "\n")
+                sink.flush()
+                done.add(key(i, layer))
+                if arm == CLEAN_ARM:
+                    clean_steps[(behavior.name, arm_name, i, layer)] = (len(gold), row["steps"])
+
+            # A single last-position injection whose clean prefix inverted exactly at
+            # every pending layer: the prefix cache and candidate order are shared, so
+            # all those layers are solved from one scan (one forward per batch instead
+            # of one per layer). Anything that does not qualify falls through below.
+            if arm != CLEAN_ARM and not args.no_reuse_clean and n_positions == 1:
                 for i in captured:
-                    if (behavior.name, arm_name, okey, mkey, args.constraint,
-                            cell_budget, arm, i, layer) in done:
-                        continue
                     gold = token_ids[i].tolist()
+                    p0 = len(gold) - 1
+                    pending = [l for l in todo if key(i, l) not in done]
+                    known = {l: clean_prefix(clean_steps, behavior.name, arm_name, i, l,
+                                             gold, p0) for l in pending}
+                    ok = [l for l in pending if known[l] is not None and len(known[l]) == p0
+                          and all(s["matched"] for s in known[l])]
+                    if not ok:
+                        continue
+                    t0 = time.time()
+                    cache, lg = sipit.prefix_cache(gold[:p0])
+                    last = sipit.solve_position_multi(
+                        cache, p0, lg, {l: captured[i][l][p0] for l in ok}, rel_tol=rel_tol,
+                        abs_tol=0.0, schedule=sipit.DEFAULT_SCHEDULE, exhaustive=False,
+                        gold=gold[p0])
+                    per = (time.time() - t0) / len(ok)
+                    for l in ok:
+                        emit(i, l, known[l] + [last[l]], known[l], per, len(ok))
+            for layer in todo:
+                pending = [i for i in captured if key(i, layer) not in done]
+                if not pending:
+                    continue
+                vocab_layer = sipit.load_vocab_layer(vocab_table, layer, layout)
+                for i in pending:
+                    gold = token_ids[i].tolist()
+                    inj_pos = injected_positions(n_positions, len(gold))
+                    known = None
+                    if arm != CLEAN_ARM and not args.no_reuse_clean:
+                        known = clean_prefix(clean_steps, behavior.name, arm_name, i, layer,
+                                             gold, len(gold) - len(inj_pos))
                     t0 = time.time()
                     steps = sipit.sipit(captured[i][layer], layer, vocab_layer,
-                                        rel_tol=rel_tol, stop_on_fail=True, gold=gold)
-                    inj_pos = injected_positions(n_positions, len(gold))
-                    inj_steps = [steps[q] for q in inj_pos if q < len(steps)] or [steps[-1]]
-                    # the worst injected position: what a k=1 detector reads, and the
-                    # floor on what any top-k mean over them can read
-                    at_inj = max(inj_steps, key=lambda x: x["residual"] / max(x["h_norm"], 1e-12)
-                                 if x.get("h_norm") else 0.0)
-                    s1 = stage1.get((args.constraint, arm, i), {})
-                    row = {
-                        "id": f"{args.behavior}_{i:03d}", "prompt_index": i,
-                        "arm": arm, "objective": okey, "budget": cell_budget,
-                        "n_positions": mkey,
-                        # the prompt SET is part of the cell: a clean control fitted on
-                        # 7-token sentiment fragments is not the control for 40-token
-                        # chat-templated jailbreak prompts
-                        "behavior": behavior.name, "test_arm": arm_name,
-                        "constraint": args.constraint, "inj_layer": inj_layer,
-                        "layer": layer, "n_target": len(gold), "n_recovered": len(steps),
-                        "exact": [s["token"] for s in steps] == gold[:len(steps)],
-                        "inj_rel_residual": (at_inj["residual"] / at_inj["h_norm"]
-                                             if at_inj.get("h_norm") else None),
-                        # the crude rel_tol oracle's verdict, free, so a trajectory-rule
-                        # detection is never confused with a tolerance detection
-                        "inj_matched": all(bool(x["matched"]) for x in inj_steps),
-                        "n_injected": len(inj_pos),
-                        "inj_rel_residual_by_position": [
-                            x["residual"] / x["h_norm"] if x.get("h_norm") else None
-                            for x in inj_steps],
-                        "rel_dev_fp16": rel_dev[i][layer],
-                        "rel_dev_fp32": (s1.get("rel_dev_by_layer") or {}).get(str(layer)),
-                        "flip_fp16": int(logits[i].argmax() != clean_logits[i].argmax()),
-                        "flip_fp32": s1.get("flip"),
-                        "elapsed": time.time() - t0,
-                        "steps": [{k: s[k] for k in ("token", "residual", "gap", "tol",
-                                                     "h_norm", "tried", "matched",
-                                                     "gold_token", "correct")
-                                   if k in s} for s in steps],
-                    }
-                    sink.write(json.dumps(row) + "\n")
-                    sink.flush()
+                                        rel_tol=rel_tol, stop_on_fail=True, gold=gold,
+                                        known_steps=known)
+                    emit(i, layer, steps, known, time.time() - t0)
                 del vocab_layer
             logger.info("%-7s %2d layers x %d prompts done, %.0fs elapsed total",
                         arm, len(todo), len(captured), time.time() - t_start)
