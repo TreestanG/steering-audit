@@ -453,6 +453,7 @@ def _project(
     layer: int,
     constraint: str,
     max_backoff: int = MAX_BACKOFF,
+    round_dtype: torch.dtype | None = None,
 ) -> Tensor:
     model, _ = require_model()
     h_norm = clean["h_norm_at"] if delta.dim() == 3 else clean["h_norm"]
@@ -461,7 +462,20 @@ def _project(
     def ball(d: Tensor) -> Tensor:
         norm = d.norm(dim=-1, keepdim=True).clamp_min(1e-30)
         shrunk = d * torch.minimum(radius / norm, torch.ones_like(norm))
-        return torch.where(radius > 0, shrunk, torch.zeros_like(d))
+        out = torch.where(radius > 0, shrunk, torch.zeros_like(d))
+        if round_dtype is None:
+            return out
+        # Round-to-nearest can land just outside the ball, so shrink and re-round
+        # until it does not. Each pass moves the norm by at most half an ULP, so this
+        # settles in one or two; the loop is a guard, not an iteration scheme.
+        for _ in range(3):
+            out = out.to(round_dtype).to(d.dtype)
+            norm = out.norm(dim=-1, keepdim=True)
+            over = norm > radius
+            if not bool(over.any()):
+                break
+            out = torch.where(over, out * (radius / norm.clamp_min(1e-30)), out)
+        return out
 
     delta = ball(delta)
     if budget <= 0 or (constraint == "injection" and layer < model.config.num_hidden_layers):
@@ -515,6 +529,7 @@ def pgd_attack_batch(
     targets: list[str] | None = None,
     position: str = "last",
     n_positions: int = 1,
+    delta_dtype: torch.dtype | None = None,
 ) -> list[dict]:
     if objective not in OBJECTIVES:
         raise ValueError(f"objective must be one of {OBJECTIVES}, got {objective!r}")
@@ -556,7 +571,8 @@ def pgd_attack_batch(
 
     def project(d: Tensor) -> Tensor:
         return _project(d, budget=budget, clean=clean, layer=layer,
-                        constraint=constraint, max_backoff=max_backoff)
+                        constraint=constraint, max_backoff=max_backoff,
+                        round_dtype=delta_dtype)
 
     best: list[dict | None] = [None] * batch
     best_delta = torch.zeros(*shape, device=device)
@@ -611,6 +627,7 @@ def pgd_attack_batch(
             "objective": objective,
             "constraint": constraint,
             "n_restarts": n_restarts,
+            "delta_dtype": None if delta_dtype is None else str(delta_dtype).split(".")[-1],
             "seed": seeds[b],
             "best_init": record["init"],
             "restarts": restarts[b],
@@ -797,6 +814,14 @@ def main():
                         help="deployment precision whose rel_tol sets the budget. NOT the "
                              "compute dtype, which stays float32: fp16 vs fp32 has to vary "
                              "the constraint alone, not the arithmetic (default: float16)")
+    parser.add_argument("--delta_dtype", type=str, default=None, choices=list(DTYPES),
+                        help="constrain the delta to values exactly representable in this "
+                             "dtype, re-rounding inside the projection at every step, so "
+                             "the perturbation the optimizer scores is bit-identical to "
+                             "the one a deployment at that precision applies. Gradients "
+                             "stay float32. Off by default: measured fp32-vs-fp16 "
+                             "disagreement at the injection layer is 0.6-0.9%%, so this "
+                             "removes a sub-percent gap rather than a large one")
     parser.add_argument("--budget_frac", type=float, default=0.85,
                         help="fraction of rel_tol to sit under (default: 0.85)")
     parser.add_argument("--rel_tol", type=float, default=None,
@@ -850,6 +875,7 @@ def main():
     if budget <= 0:
         raise SystemExit(f"--budget must be positive, got {budget:g}")
     rel_tol = args.rel_tol if args.rel_tol is not None else _ratio(budget, args.budget_frac)
+    delta_dtype = DTYPES[args.delta_dtype] if args.delta_dtype else None
 
     behavior = behaviors.load_behavior(args.behavior)
     arm_name = args.arm or behavior.default_arm
@@ -965,6 +991,7 @@ def main():
         "budget": budget,
         "rel_tol": rel_tol,
         "objective": args.objective,
+        "delta_dtype": args.delta_dtype,
     }
     rows = list(done.values())
     deltas: dict[str, Tensor] = {}
@@ -996,6 +1023,7 @@ def main():
                             seeds=[args.seed + i for i in idxs],
                             max_backoff=args.max_backoff, targets=batch_targets,
                             position=args.position, n_positions=n_positions,
+                            delta_dtype=delta_dtype,
                         )
                         batch_deltas = [r.pop("delta") for r in results]
                         records = []
