@@ -17,7 +17,9 @@ logger = get_logger(__name__)
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p = argparse.ArgumentParser(
+        description=(__doc__ or "Decode under a stage-1 PGD delta and score the "
+                     "completions.").splitlines()[0])
     p.add_argument("--model_name", default="Qwen/Qwen2.5-0.5B-Instruct")
     add_model_args(p, default_dtype="float16")
     p.add_argument("--deltas", type=Path, required=True, help="stage-1 <stem>_deltas.pt")
@@ -62,6 +64,8 @@ def main():
         iv = None
         if arm != "none":
             d = torch.stack([deltas[(a.constraint, arm, i)] for i in range(len(prompts))])
+            # index=-1 resolves to the end of the real span: padding-agnostic even though
+            # pgd_attack padded right and generate._encode pads left
             iv = Intervention(layer=layer, delta=d.to(model_device()),
                               positions="index", index=-1)
         return generate_completions(prompts, iv, max_new_tokens=a.max_new_tokens,
