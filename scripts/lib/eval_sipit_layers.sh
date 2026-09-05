@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -u
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
+ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$ROOT"
 
 usage() {
@@ -14,7 +14,7 @@ Sweep SipIt across every hidden-state layer on a stratified subset of the bank.
   --out_dir DIR     default: results/<slug>/sipit/layers (from sipit.py)
   --dry_run         print selected ids and exit
 
-Everything else is forwarded to eval_sipit_single.sh (and then sipit.py),
+Everything else is forwarded to lib/eval_sipit_single.sh (and then sipit.py),
 --device and --dtype included.
 EOF
 }
@@ -150,7 +150,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
     exit 0
 fi
 
-"$ROOT/scripts/eval_sipit_single.sh" \
+"$ROOT/scripts/lib/eval_sipit_single.sh" \
     --act_dir "$ACT_DIR" \
     --ids "$ids_csv" \
     --all_layers \

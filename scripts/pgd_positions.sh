@@ -8,7 +8,7 @@ usage() {
 Sweep the PGD attack over the NUMBER OF INJECTED POSITIONS and score each m against
 both detector calibrations.
 
-  scripts/run_pgd_positions.sh [MODEL] [options]
+  scripts/pgd_positions.sh [MODEL] [options]
 
 The budget stays PER POSITION at every m, so m is a knob on total perturbation
 energy at a fixed per-position deviation. That is the axis the two shipped
@@ -39,9 +39,9 @@ computed once for the sweep, not once per m.
 --save_deltas only collects the rows its own invocation computed, so stage 1 is
 always run with --force here rather than resumed.
 
-  scripts/run_pgd_positions.sh gpt2
-  scripts/run_pgd_positions.sh gpt2 --positions 1,5 --steps 100
-  scripts/run_pgd_positions.sh gpt2 --score_only
+  scripts/pgd_positions.sh gpt2
+  scripts/pgd_positions.sh gpt2 --positions 1,5 --steps 100
+  scripts/pgd_positions.sh gpt2 --score_only
 EOF
 }
 
@@ -138,4 +138,4 @@ if [[ ${#failed[@]} -gt 0 ]]; then
     exit 1
 fi
 echo "sweep complete; re-print the table with:"
-echo "  scripts/run_pgd_positions.sh $MODEL --score_only --positions ${MS[0]}"
+echo "  scripts/pgd_positions.sh $MODEL --score_only --positions ${MS[0]}"

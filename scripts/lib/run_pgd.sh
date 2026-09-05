@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -u
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
+ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$ROOT"
 
 usage() {
     cat <<'EOF'
 Run src/pgd_attack.py over one or more models, at one or more detection budgets.
 
-  scripts/run_pgd.sh [MODEL...] [options]
+  scripts/lib/run_pgd.sh [MODEL...] [options]
 
 MODEL defaults to Qwen/Qwen2.5-0.5B-Instruct. Several models run one after another --
 they share a GPU, so running them concurrently trades wall clock for OOM risk. A model
@@ -63,9 +63,9 @@ Output, per model per budget:
 The .json is written last, so it is the "finished" sentinel: a re-run skips a budget
 that has one, and resumes from the .jsonl for a budget that does not.
 
-  scripts/run_pgd.sh                                  # quick check on Qwen-0.5B
-  scripts/run_pgd.sh EleutherAI/pythia-1.4b # the full 25-prompt run
-  scripts/run_pgd.sh Qwen/Qwen2.5-7B-Instruct --budget_dtypes float16,float32
+  scripts/lib/run_pgd.sh                                  # quick check on Qwen-0.5B
+  scripts/lib/run_pgd.sh EleutherAI/pythia-1.4b # the full 25-prompt run
+  scripts/lib/run_pgd.sh Qwen/Qwen2.5-7B-Instruct --budget_dtypes float16,float32
 
 --tag is the usual way to reach an fp32 control tree: it points the gaps.json lookup
 and the output at results/<slug>_fp32/ together, so --gaps is only needed when reading

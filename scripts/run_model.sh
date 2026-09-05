@@ -17,14 +17,14 @@ prerequisites is abandoned and the sweep moves on to the next one.
 Stages, in order (each skipped when its output already exists):
   activations  save_activations.py        -> data/activations/<slug>/*.pt
   vocab        vocab_activation_table.py  -> data/activations/<slug>/vocab/vocab_table.pt
-  sipit        eval_sipit_layers.sh       -> results/<slug>/sipit/layers/
+  sipit        lib/eval_sipit_layers.sh   -> results/<slug>/sipit/layers/
   detect       detect.py                  -> results/<slug>/sipit/detector_calibration.json
                calibrates the per-trajectory detector on the clean inversions just
                written. Always re-runs -- it is seconds, and a stale calibration is
                worse than none.
   sentiment    behavior_eval.py           -> results/<slug>/sentiment/gaps.json
   audit        steer_audit.py             -> results/<slug>/steer/audit.jsonl
-  fractions    sweep_steer_fractions.sh   -> results/<slug>/steer/fractions/
+  fractions    lib/sweep_steer_fractions.sh -> results/<slug>/steer/fractions/
   recover      steer_recover.py           -> results/<slug>/steer/{recover,localize}.jsonl
   plots        the five plot_*.py         -> results/<slug>/**/figures/
   behaviors    run_behavior.sh            -> results/<slug>/behavior/<name>/<arm>/
@@ -36,6 +36,9 @@ Options:
   -v, --verbose     per-item detail from each stage (-vv also un-silences HF)
   -q, --quiet       one line per stage, as before
   --full            real run sizes (default is a quick end-to-end validation)
+  --setup_only      stop after detect: activations, vocab table, clean bank and
+                    calibration are all an attack (pgd_ladder.sh, steer_sweep.sh,
+                    chat_calibration.sh) needs from this pipeline
   --force           re-run stages whose output already exists
   --dtype D         float32 (default) | float16 | bfloat16
   --tag T           suffix every path with _T. Defaults to the dtype (fp32 /
@@ -97,6 +100,7 @@ TAG=
 DEVICE=
 FORCE=0
 FULL=0
+SETUP_ONLY=0
 DRY_RUN=0
 NO_PLOTS=0
 BEHAVIORS=all
@@ -107,6 +111,7 @@ CHILD_LEVEL=INFO
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --full)     FULL=1; shift ;;
+        --setup_only) SETUP_ONLY=1; shift ;;
         --force)    FORCE=1; shift ;;
         --no_plots) NO_PLOTS=1; shift ;;
         --behaviors)    BEHAVIORS=$2; shift 2 ;;
@@ -303,7 +308,7 @@ print(AutoConfig.from_pretrained('$MODEL').num_hidden_layers)" 2>"$probe_err" | 
         uv run src/vocab_activation_table.py "${COMMON[@]}" || { model_failed "$MODEL"; return 1; }
 
     stage sipit "$RES/sipit/layers/sipit_layer_00.jsonl" \
-        scripts/eval_sipit_layers.sh --act_dir "$ACT_DIR" --n_prompts "$SIPIT_PROMPTS" \
+        scripts/lib/eval_sipit_layers.sh --act_dir "$ACT_DIR" --n_prompts "$SIPIT_PROMPTS" \
             --model_name "$MODEL" --dtype "$DTYPE" ${DEVICE:+--device "$DEVICE"}
     # Cheap post-hoc read of the sipit rows just written -- no GPU, no API, seconds. It
     # produces the operating point for the detector this repo actually ships, and its
@@ -311,13 +316,24 @@ print(AutoConfig.from_pretrained('$MODEL').num_hidden_layers)" 2>"$probe_err" | 
     # the rule is worse than none, and the cost of refreshing it is nil.
     stage detect - \
         uv run src/detect.py --slug "$SLUG" --sensitivity
+    if [[ $SETUP_ONLY -eq 1 ]]; then
+        say ""
+        if [[ ${#FAILED[@]} -gt 0 ]]; then
+            say "failed stages: ${FAILED[*]}"
+            SUMMARY+=("$(printf '  %-34s FAILED: %s' "$MODEL" "${FAILED[*]}")")
+            return 1
+        fi
+        [[ $DRY_RUN -eq 1 ]] || say "setup done -> $RES/   (logs in $LOG_DIR/)"
+        SUMMARY+=("$(printf '  %-34s setup ok -> %s/' "$MODEL" "$RES")")
+        return 0
+    fi
     stage sentiment "$RES/sentiment/gaps.json" \
         uv run src/behavior_eval.py "${COMMON[@]}" --behavior sentiment \
             --fractions "$FRACTIONS" --no_target_gap
     stage audit "$RES/steer/audit.jsonl" \
         uv run src/steer_audit.py "${COMMON[@]}" --n_prompts "$AUDIT_PROMPTS"
     stage fractions "$RES/steer/fractions/*.jsonl" \
-        scripts/sweep_steer_fractions.sh --model_name "$MODEL" --fractions "$FRACTIONS" \
+        scripts/lib/sweep_steer_fractions.sh --model_name "$MODEL" --fractions "$FRACTIONS" \
             --n_prompts "$AUDIT_PROMPTS" --no_plot \
             --dtype "$DTYPE" ${DEVICE:+--device "$DEVICE"}
     stage recover "$RES/steer/recover.jsonl" \
@@ -362,7 +378,7 @@ print(AutoConfig.from_pretrained('$MODEL').num_hidden_layers)" 2>"$probe_err" | 
         [[ -n $DEVICE ]] && pargs+=(--device "$DEVICE")
         [[ $FORCE -eq 1 ]] && pargs+=(--force)
         [[ $DRY_RUN -eq 1 ]] && pargs+=(--dry_run)
-        scripts/run_pgd.sh "$MODEL" "${pargs[@]}" || FAILED+=("pgd")
+        scripts/lib/run_pgd.sh "$MODEL" "${pargs[@]}" || FAILED+=("pgd")
     fi
 
     say ""
