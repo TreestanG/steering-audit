@@ -39,9 +39,25 @@ def main():
     from transformers import AutoTokenizer
     tk = AutoTokenizer.from_pretrained(args.model_name)
 
+    bos = tk.bos_token
+    dup = bool(bos) and tk(bos)["input_ids"][:2] == [tk.bos_token_id] * 2
+
     def wrap(text):
-        return tk.apply_chat_template([{"role": "user", "content": text}],
-                                      tokenize=False, add_generation_prompt=True)
+        """The rendered turn, stored so it re-tokenizes to what a deployment sends.
+
+        gemma's template emits <bos> itself AND its tokenizer prepends one, so the
+        stored text would invert with a DUPLICATE <bos> -- not the prompt any real
+        caller produces. Strip the template's copy when the tokenizer will re-add it.
+        Qwen's template emits no BOS and is untouched.
+        """
+        out = tk.apply_chat_template([{"role": "user", "content": text}],
+                                     tokenize=False, add_generation_prompt=True)
+        if dup and out.startswith(bos):
+            out = out[len(bos):]
+        ids = tk(out)["input_ids"]
+        if bos and ids[:2] == [tk.bos_token_id] * 2:
+            raise SystemExit("stored prompt still double-tokenizes its BOS")
+        return out
 
     bare = json.loads(args.bank.read_text())["prompts"]
     taken = set()

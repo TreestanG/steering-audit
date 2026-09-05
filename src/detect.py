@@ -63,6 +63,53 @@ def load_trajectories(layers_dir: Path) -> list[dict]:
 
 
 
+# (turn-start, turn-end) delimiter pairs, tried in order against the model's own
+# rendered template. Qwen/ChatML first, then gemma, Llama-3, Mistral.
+KNOWN_CHAT_DELIMS = (("<|im_start|>", "<|im_end|>"),
+                     ("<start_of_turn>", "<end_of_turn>"),
+                     ("<|start_header_id|>", "<|eot_id|>"),
+                     ("[INST]", "[/INST]"))
+
+
+def chat_template_spec(tokenizer, start: str | None = None, end: str | None = None):
+    """((start_id, end_id, user_role_id), header_len) read off the tokenizer's template.
+
+    header_len is measured, not assumed: it is the number of tokens from the user
+    turn's start marker to the first content token (marker + role name + newline on
+    every template here, but templates are free to differ).
+    """
+    if not getattr(tokenizer, "chat_template", None):
+        # a base model with no template: every position is content, which is what
+        # position_roles does with chat_ids=None. role_z still applies (per-position
+        # z), it just has one content role per layer instead of template roles.
+        return None, 3
+    sentinel = "\u00a7CONTENT\u00a7"
+    text = tokenizer.apply_chat_template([{"role": "user", "content": sentinel}],
+                                         tokenize=False, add_generation_prompt=True)
+    pairs = [(start, end)] if start and end else [
+        p for p in KNOWN_CHAT_DELIMS if p[0] in text and p[1] in text]
+    if not pairs:
+        raise SystemExit(
+            f"no known turn delimiters in this template; pass --chat_start/--chat_end.\n"
+            f"rendered: {text[:200]!r}")
+    start, end = pairs[0]
+    ids = [tokenizer.convert_tokens_to_ids(t) for t in (start, end)]
+    if any(i is None or i == tokenizer.unk_token_id for i in ids):
+        raise SystemExit(f"delimiters {start!r}/{end!r} are not single tokens here")
+    enc = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
+    at = text.index(sentinel)
+    content_tok = next((j for j, (a, _) in enumerate(enc["offset_mapping"]) if a == at), None)
+    marker_tok = next((j for j, t in reversed(list(enumerate(enc["input_ids"])))
+                       if t == ids[0] and (content_tok is None or j < content_tok)), None)
+    if content_tok is None or marker_tok is None:
+        raise SystemExit(f"could not locate the user turn in: {text[:200]!r}")
+    # the role-name token that follows the start marker ('user'). The delimiter alone
+    # is ambiguous on a TRUNCATED trajectory, where the trailing generation-prompt
+    # marker is missing and the last-but-one start marker is the SYSTEM turn.
+    user_role = enc["input_ids"][marker_tok + 1]
+    return (ids[0], ids[1], user_role), content_tok - marker_tok
+
+
 CONTENT_SCHEMES = ("pooled", "end")
 TRANSFORMS = ("none", "log")
 SD_FLOOR_RAW = 1e-5
@@ -70,7 +117,8 @@ SD_FLOOR_LOG = 0.05
 
 
 def position_roles(tokens: list[int], chat_ids: tuple[int, int] | None,
-                   content_scheme: str = "pooled", end_cap: int = 6) -> list[str]:
+                   content_scheme: str = "pooled", end_cap: int = 6,
+                   header_len: int = 3) -> list[str]:
     n = len(tokens)
 
     def plain(i: int) -> str:
@@ -80,12 +128,28 @@ def position_roles(tokens: list[int], chat_ids: tuple[int, int] | None,
 
     if not chat_ids:
         return [plain(i) for i in range(n)]
-    start_id, end_id = chat_ids
-    starts = [i for i, t in enumerate(tokens) if t == start_id]
+    start_id, end_id = chat_ids[0], chat_ids[1]
+    user_id = chat_ids[2] if len(chat_ids) > 2 else None
     ends = [i for i, t in enumerate(tokens) if t == end_id]
-    if len(starts) < 2 or len(ends) < 2:
+    # The user turn is the LAST start marker followed by the 'user' role token. Keying
+    # on the role token rather than the delimiter's position is what makes this safe on
+    # a truncated trajectory, where the trailing generation-prompt marker is absent and
+    # the last-but-one delimiter is the SYSTEM turn. Qwen (3 starts, 2 ends) lands on
+    # its old starts[1]/ends[1] exactly; gemma has no system turn and only ONE end
+    # marker, which the previous len(ends) < 2 guard sent down the bare-text path.
+    if user_id is None:
+        starts = [i for i, t in enumerate(tokens) if t == start_id]
+        u = starts[-2] if len(starts) >= 2 else None
+    else:
+        heads = [i for i, t in enumerate(tokens[:-1])
+                 if t == start_id and tokens[i + 1] == user_id]
+        u = heads[-1] if heads else None
+    after = [e for e in ends if e > u] if u is not None else []
+    if u is None or not after:
         return [plain(i) for i in range(n)]
-    c0, c1 = starts[1] + 3, ends[1]   # after '<|im_start|>user\n'
+    c0, c1 = u + header_len, after[0]   # header is marker + role name + newline
+    if not 0 < c0 < c1 <= n:
+        return [plain(i) for i in range(n)]
 
     def content_role(i: int) -> str:
         # the edges of the user turn have their own clean distributions: the first
@@ -111,17 +175,20 @@ def _transform(x: float, transform: str) -> float | None:
 
 
 def _role_inputs(row: dict, chat_ids, content_scheme: str = "pooled",
-                 end_cap: int = 6) -> tuple[list[float], list[str]]:
+                 end_cap: int = 6, header_len: int = 3) -> tuple[list[float], list[str]]:
     steps = [s for s in row.get("steps", []) if s.get("h_norm")]
     return ([s["residual"] / s["h_norm"] for s in steps],
-            position_roles([s["token"] for s in steps], chat_ids, content_scheme, end_cap))
+            position_roles([s["token"] for s in steps], chat_ids, content_scheme,
+                           end_cap, header_len))
 
 
 def fit_role_stats(rows: list[dict], chat_ids, sd_floor: float, transform: str = "none",
-                   content_scheme: str = "pooled", end_cap: int = 6) -> dict:
+                   content_scheme: str = "pooled", end_cap: int = 6,
+                   header_len: int = 3) -> dict:
     acc: dict[tuple[int, str], list[float]] = {}
     for row in rows:
-        for x, role in zip(*_role_inputs(row, chat_ids, content_scheme, end_cap)):
+        for x, role in zip(*_role_inputs(row, chat_ids, content_scheme, end_cap,
+                                         header_len)):
             v = _transform(x, transform)
             if v is not None:
                 acc.setdefault((row["layer"], role), []).append(v)
@@ -135,8 +202,9 @@ def fit_role_stats(rows: list[dict], chat_ids, sd_floor: float, transform: str =
 
 def role_z_score(row: dict, cal: dict, k: int) -> float:
     transform = cal.get("transform", "none")
-    res, roles = _role_inputs(row, tuple(cal["chat_ids"]),
-                              cal.get("content_scheme", "pooled"), cal.get("end_cap", 6))
+    res, roles = _role_inputs(row, tuple(cal["chat_ids"]) if cal.get("chat_ids") else None,
+                              cal.get("content_scheme", "pooled"), cal.get("end_cap", 6),
+                              cal.get("chat_header_len", 3))
     st = cal["role_stats"].get(str(row["layer"]), {})
     z = []
     for x, r in zip(res, roles):
@@ -371,6 +439,11 @@ def main():
                              "(layer, role) distribution before the top-k -- required "
                              "on chat-templated input, where raw top-k is a statistic "
                              "of the template (see position_roles)")
+    parser.add_argument("--chat_start", type=str, default=None,
+                        help="turn-start delimiter; default: auto-detected from the "
+                             "model's own rendered template")
+    parser.add_argument("--chat_end", type=str, default=None,
+                        help="turn-end delimiter; default: auto-detected")
     parser.add_argument("--chat_model", type=str, default=None,
                         help="tokenizer whose <|im_start|>/<|im_end|> ids delimit the "
                              "template for --statistic role_z")
@@ -398,14 +471,19 @@ def main():
     if args.sd_floor is None:
         args.sd_floor = SD_FLOOR_LOG if args.transform == "log" else SD_FLOOR_RAW
 
-    chat_ids = None
+    chat_ids, header_len = None, 3
     if args.statistic == "role_z":
         if not args.chat_model:
             raise SystemExit("--statistic role_z needs --chat_model for the template ids")
         from transformers import AutoTokenizer
         tk = AutoTokenizer.from_pretrained(args.chat_model)
-        chat_ids = (tk.convert_tokens_to_ids("<|im_start|>"),
-                    tk.convert_tokens_to_ids("<|im_end|>"))
+        chat_ids, header_len = chat_template_spec(tk, args.chat_start, args.chat_end)
+        if chat_ids is None:
+            logger.info("%s has no chat template: all positions are content",
+                        args.chat_model)
+        else:
+            logger.info("chat template: start=%r end=%r user=%r header_len=%d",
+                        *(tk.convert_ids_to_tokens(i) for i in chat_ids), header_len)
     dirs = sorted(p for p in args.results_root.glob(f"*/sipit/{args.layers_subdir}")
                   if p.is_dir())
 
@@ -436,12 +514,13 @@ def main():
         traj = load_trajectories(layers_dir)
         role_cal = None
         if args.statistic == "role_z":
-            role_cal = {"statistic": "role_z", "chat_ids": list(chat_ids),
+            role_cal = {"statistic": "role_z",
+                        "chat_ids": list(chat_ids) if chat_ids else None,
                         "transform": args.transform, "content_scheme": args.content_roles,
-                        "end_cap": args.end_cap,
+                        "end_cap": args.end_cap, "chat_header_len": header_len,
                         "role_stats": fit_role_stats(traj, chat_ids, args.sd_floor,
                                                      args.transform, args.content_roles,
-                                                     args.end_cap)}
+                                                     args.end_cap, header_len)}
             n_roles = sum(len(d) for d in role_cal["role_stats"].values())
             at_floor = sum(1 for d in role_cal["role_stats"].values() for v in d.values()
                            if v["sd"] <= args.sd_floor * (1 + 1e-9))
@@ -495,7 +574,7 @@ def main():
                 "statistic": args.statistic,
                 **({"chat_ids": role_cal["chat_ids"], "sd_floor": args.sd_floor,
                     "transform": args.transform, "content_scheme": args.content_roles,
-                    "end_cap": args.end_cap,
+                    "end_cap": args.end_cap, "chat_header_len": header_len,
                     "role_stats": role_cal["role_stats"],
                     "fit_layers_dir": str(layers_dir)} if role_cal else {}),
                 "min_run": args.min_run,

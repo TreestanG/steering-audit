@@ -30,10 +30,21 @@ def resolve_format(fmt: str, behavior: Behavior) -> str:
 
 
 def _chat(messages: list[dict]) -> str:
+    """The rendered turn, as the string every caller then tokenizes.
+
+    Every consumer here tokenizes with add_special_tokens left at its default, so a
+    template that emits its own BOS -- gemma's does, Qwen's does not -- would yield a
+    DUPLICATE BOS and a prompt no real caller produces. Strip the template's copy when
+    the tokenizer will re-add it, so the rendered prompt round-trips to itself.
+    """
     _, tokenizer = require_model()
     text = tokenizer.apply_chat_template(messages, tokenize=False,
                                          add_generation_prompt=True)
     assert isinstance(text, str)
+    bos = getattr(tokenizer, "bos_token", None)
+    if bos and text.startswith(bos) and \
+            tokenizer(bos)["input_ids"][:2] == [tokenizer.bos_token_id] * 2:
+        text = text[len(bos):]
     return text
 
 
