@@ -400,6 +400,28 @@ def main():
                 if arm == CLEAN_ARM:
                     clean_steps[(behavior.name, arm_name, i, layer)] = (len(gold), row["steps"])
 
+            # The clean arm inverts every position at every layer, and all layers recover
+            # the same tokens, so one scan per prompt serves them all (sipit_multi); a
+            # layer that recovers a different token is finished alone from its prefix.
+            if arm == CLEAN_ARM and not args.no_reuse_clean:
+                def vocab_layer_for(l: int) -> Tensor:
+                    return sipit.load_vocab_layer(vocab_table, l, layout)
+                for i in captured:
+                    gold = token_ids[i].tolist()
+                    pending = [l for l in todo if key(i, l) not in done]
+                    if not pending:
+                        continue
+                    t0 = time.time()
+                    steps_by, diverged = sipit.sipit_multi(
+                        {l: captured[i][l] for l in pending}, vocab_layer_for,
+                        rel_tol=rel_tol, stop_on_fail=True, gold=gold)
+                    for l in sorted(diverged):
+                        steps_by[l] = sipit.sipit(captured[i][l], l, vocab_layer_for(l),
+                                                  rel_tol=rel_tol, stop_on_fail=True, gold=gold,
+                                                  known_steps=steps_by[l])
+                    per = (time.time() - t0) / len(pending)
+                    for l in pending:
+                        emit(i, l, steps_by[l], None, per, len(pending))
             # A single last-position injection whose clean prefix inverted exactly at
             # every pending layer: the prefix cache and candidate order are shared, so
             # all those layers are solved from one scan (one forward per batch instead

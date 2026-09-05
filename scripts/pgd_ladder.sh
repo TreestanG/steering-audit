@@ -19,6 +19,11 @@
 #   --stages L        attack,detect,decode,judge,join (default: all that apply). The judge
 #                     needs the Fireworks key in .env, so on a box without it run
 #                     --stages attack,detect,decode there and --stages judge,join here
+#   --tag T           isolate everything under results/<slug>_T/ (AAT_RUN_TAG), so a
+#                     second n or a second device never resumes into existing rows. The
+#                     tag renames every derived path, so results/<slug>_T/sipit and
+#                     data/activations/<slug>_T are symlinked to the _fp16 trees when
+#                     absent -- calibration and vocab table are shared, rows are not
 #   --force           redo the attack even if its deltas exist
 #   --dry_run         print the commands and exit
 #
@@ -31,7 +36,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd); cd "$ROOT"
 MODEL=${1:?usage: pgd_ladder.sh MODEL [options]}; shift
 BEHAVIOR=jbb_refusal; ARM=; OBJECTIVE=; BUDGETS=0.0085,0.02,0.05,0.12,0.30; N=15
 ARMS=pgd,random; LAYER_FRAC=0.7; LAYER=; STEPS=40; RESTARTS=1
-CALS=detector_calibration_rolezlog_k1_fpr5.json; STAGES=; FORCE=0; DRY=0
+CALS=detector_calibration_rolezlog_k1_fpr5.json; STAGES=; FORCE=0; DRY=0; TAG=
 while [[ $# -gt 0 ]]; do
   case $1 in
     --behavior) BEHAVIOR=$2; shift 2 ;;
@@ -46,9 +51,10 @@ while [[ $# -gt 0 ]]; do
     --n_restarts) RESTARTS=$2; shift 2 ;;
     --calibrations) CALS=$2; shift 2 ;;
     --stages) STAGES=$2; shift 2 ;;
+    --tag) TAG=$2; shift 2 ;;
     --force) FORCE=1; shift ;;
     --dry_run) DRY=1; shift ;;
-    -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
     *) echo "unknown flag: $1" >&2; exit 1 ;;
   esac
 done
@@ -60,8 +66,25 @@ if [[ -z $STAGES ]]; then
   [[ $OBJECTIVE == target ]] && STAGES=attack,detect,decode,judge,join || STAGES=attack,detect
 fi
 SLUG=${MODEL//\//_}
-LAD=results/${SLUG}_fp32/pgd/ladder
-OUT16=results/${SLUG}_fp16
+if [[ -n $TAG ]]; then
+  export AAT_RUN_TAG=$TAG
+  if [[ ! -e results/${SLUG}_$TAG/sipit ]]; then
+    [[ -d results/${SLUG}_fp16/sipit ]] || { echo "no results/${SLUG}_fp16/sipit to share with tag $TAG" >&2; exit 1; }
+    mkdir -p "results/${SLUG}_$TAG"
+    ln -s "../${SLUG}_fp16/sipit" "results/${SLUG}_$TAG/sipit"
+    echo "linked results/${SLUG}_$TAG/sipit -> ${SLUG}_fp16/sipit"
+  fi
+  if [[ ! -e data/activations/${SLUG}_$TAG ]]; then
+    [[ -d data/activations/${SLUG}_fp16 ]] || { echo "no data/activations/${SLUG}_fp16 to share with tag $TAG" >&2; exit 1; }
+    ln -s "${SLUG}_fp16" "data/activations/${SLUG}_$TAG"
+    echo "linked data/activations/${SLUG}_$TAG -> ${SLUG}_fp16"
+  fi
+  LAD=results/${SLUG}_$TAG/pgd/ladder
+  OUT16=results/${SLUG}_$TAG
+else
+  LAD=results/${SLUG}_fp32/pgd/ladder
+  OUT16=results/${SLUG}_fp16
+fi
 LOG=$OUT16/logs/pgd_ladder_${BEHAVIOR}_${ARM}.log
 mkdir -p "$LAD" "$OUT16/logs" "$OUT16/pgd_sipit"
 LAYER_ARGS=(--layer_frac "$LAYER_FRAC"); [[ -n $LAYER ]] && LAYER_ARGS=(--layer "$LAYER")
