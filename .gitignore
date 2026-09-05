@@ -25,3 +25,6 @@ results/**
 !results/*/behavior/*/*/gaps.json
 !results/*/behavior/*/*/evaluations.json
 !results/*/behavior/*/*/detection_vs_efficacy.json
+
+# CUDA-computed rows, kept apart from the MPS results tree
+results_cuda/
