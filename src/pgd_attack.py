@@ -353,6 +353,35 @@ class DetectorSurrogate:
         return flat.max(dim=-1).values, sd_flat.gather(-1, best.unsqueeze(-1)).squeeze(-1)
 
     @torch.no_grad()
+    def worst_rule(self, delta: Tensor, clean: dict) -> tuple[Tensor, Tensor]:
+        """Per row: how far the DEPLOYED rule is from firing, and the sd to shrink by.
+
+        The rule fires on a run of min_run adjacent layers over sigma, or one layer over
+        sigma_any. A run's excess is the smallest z in its window minus the target (the
+        layer that must drop to break it); the any-layer excess is max z minus the
+        any-target. The larger of the two is what projection must bring to zero.
+        """
+        out, _ = _run_with_delta(clean, self.layer, delta, want_states=True)
+        z = self.z(out, delta, clean)
+        z = torch.where(self.keep.unsqueeze(0) > 0, z, torch.full_like(z, float("-inf")))
+        zmax_pos, arg_pos = z.max(dim=-1)                       # [L, B]
+        sd_pos = self.sd.gather(-1, arg_pos.unsqueeze(-1)).squeeze(-1)
+        n = zmax_pos.shape[0]
+        run_excess = torch.full_like(zmax_pos[0], float("-inf"))
+        run_sd = sd_pos[0].clone()
+        for i in range(max(0, n - self.min_run + 1)):
+            win = zmax_pos[i:i + self.min_run]
+            wmin, wi = win.min(dim=0)
+            better = wmin - self.sigma_target > run_excess
+            run_excess = torch.where(better, wmin - self.sigma_target, run_excess)
+            run_sd = torch.where(better, sd_pos[i:i + self.min_run].gather(0, wi.unsqueeze(0)).squeeze(0), run_sd)
+        amax, ai = zmax_pos.max(dim=0)
+        any_excess = amax - self.sigma_any_target
+        any_sd = sd_pos.gather(0, ai.unsqueeze(0)).squeeze(0)
+        use_any = any_excess > run_excess
+        return torch.where(use_any, any_excess, run_excess), torch.where(use_any, any_sd, run_sd)
+
+    @torch.no_grad()
     def report(self, delta: Tensor, clean: dict) -> list[dict]:
         out, _ = _run_with_delta(clean, self.layer, delta, want_states=True)
         z = self.z(out, delta, clean).max(dim=-1).values
@@ -621,8 +650,11 @@ def _project(
         if detector is None or z_target is None:
             raise ValueError("constraint 'detector' needs --detector_cal")
         for _ in range(max_backoff):
-            zmax, sd = detector.worst_z(delta, clean)
-            over = zmax - z_target
+            if detector.rule == "run":
+                over, sd = detector.worst_rule(delta, clean)
+            else:
+                zmax, sd = detector.worst_z(delta, clean)
+                over = zmax - z_target
             if bool((over <= 0).all()):
                 break
             factor = torch.where(over > 0, torch.exp(-(over + 0.1) * sd), torch.ones_like(over))
@@ -1018,9 +1050,10 @@ def main():
                         help="softplus sharpness of the hinge above --penalty_sigma")
     parser.add_argument("--penalty_rule", type=str, default="layer", choices=("layer", "run"),
                         help="layer: hold EVERY downstream layer under sigma (stricter than "
-                             "deployed). run: the deployed rule -- penalise a run of min_run "
-                             "adjacent layers over sigma, or any layer over sigma_any, so up "
-                             "to min_run-1 adjacent layers may exceed sigma for free")
+                             "deployed). run: the deployed rule -- a run of min_run adjacent "
+                             "layers over sigma, or any layer over sigma_any, so up to "
+                             "min_run-1 adjacent layers may exceed sigma for free. Applies to "
+                             "both the penalty and the 'detector' projection constraint")
     parser.add_argument("--penalty_warm_start", type=int, default=0,
                         help="run this many steps WITHOUT the penalty first, i.e. find a "
                              "working attack and then hide it, instead of starting from the "
