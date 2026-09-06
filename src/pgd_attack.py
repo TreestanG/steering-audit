@@ -7,6 +7,7 @@ import torch
 from torch import Tensor
 
 import behaviors
+import detect
 import prompt_format
 from generate import resolve_index
 from log import add_logging_args, get_logger
@@ -35,7 +36,7 @@ from utils import (
 logger = get_logger(__name__)
 
 OBJECTIVES = ("sentiment", "cw", "target", "refusal")
-CONSTRAINTS = ("all", "injection")
+CONSTRAINTS = ("all", "injection", "detector")
 ARMS = ("caa", "random", "pgd")
 POSITIONS = ("last", "first")
 
@@ -243,6 +244,138 @@ def _rel_devs_read(out, clean: dict, layer: int) -> dict[int, Tensor]:
         h_steer = out.hidden_states[k][rows, read].float()
         devs[k] = (h_steer - h_clean).norm(dim=-1) / h_clean.norm(dim=-1)
     return devs
+
+
+class DetectorSurrogate:
+    """Differentiable stand-in for the shipped log role_z k=1 rule at the injected positions.
+
+    SipIt recovers the gold token wherever the delta is small enough, so its residual at
+    an injected position is the distance to the CLEAN state there, up to the numerics
+    floor the clean rows themselves sit on. The surrogate is that distance combined with
+    the calibration's clean floor for the position's role, log-transformed and z-scored
+    with the same per-(layer, role) mean and sd the detector uses. The max over positions
+    becomes a sum of soft hinges above `sigma_target`, one per layer at or after the
+    injection, so the attacker is pushed to hold every layer under the alarm.
+    """
+
+    def __init__(self, cal: dict, clean: dict, layer: int, *, sigma_target: float, beta: float,
+                 rule: str = "layer"):
+        model, _ = require_model()
+        self.cal, self.layer, self.beta, self.sigma_target = cal, layer, beta, sigma_target
+        self.rule = rule
+        self.min_run = int(cal.get("min_run", 3))
+        margin = float(cal["sigma"]) - sigma_target
+        self.sigma_any_target = float(cal.get("sigma_any", float("inf"))) - margin
+        stats = cal["role_stats"]
+        self.layers = [k for k in range(layer, model.config.num_hidden_layers + 1) if str(k) in stats]
+        chat_ids = tuple(cal["chat_ids"]) if cal.get("chat_ids") else None
+        scheme, end_cap, header = (cal.get("content_scheme", "pooled"), cal.get("end_cap", 6),
+                                   cal.get("chat_header_len", 3))
+        self.multi = clean["n_positions"] > 1
+        at = clean["inject_at"] if self.multi else clean["positions"].unsqueeze(-1)
+        batch, m = at.shape
+        ids = clean["inputs"]["input_ids"]
+        mean = torch.full((len(self.layers), batch, m), float("nan"))
+        sd = torch.ones_like(mean)
+        self.roles: list[list[str | None]] = []
+        for b in range(batch):
+            n_prompt = int(clean["positions"][b]) + 1
+            roles = detect.position_roles(ids[b, :n_prompt].tolist(), chat_ids, scheme, end_cap, header)
+            row = []
+            for j in range(m):
+                pos = int(at[b, j])
+                role = roles[pos] if 0 <= pos < len(roles) else None
+                row.append(role)
+                for i, k in enumerate(self.layers):
+                    st = stats[str(k)].get(role) if role else None
+                    if st:
+                        mean[i, b, j], sd[i, b, j] = st["mean"], st["sd"]
+            self.roles.append(row)
+        dev = model_device()
+        self.mean, self.sd = mean.to(dev), sd.to(dev)
+        self.valid = ~torch.isnan(self.mean)
+        self.keep = (clean["inject_keep"].to(dev).float() if self.multi
+                     else torch.ones(batch, 1, device=dev))
+        if not bool(self.valid.any()):
+            raise ValueError("detector surrogate: no calibration stats for the injected "
+                             f"positions' roles {self.roles[0]} at layers {self.layers[:3]}...")
+
+    def devs(self, out, delta: Tensor, clean: dict) -> Tensor:
+        rows = clean["rows"]
+        positions = clean["inject_at"] if self.multi else clean["positions"]
+        clean_states = clean["states_at"] if self.multi else clean["states"]
+        d = delta if self.multi else delta.unsqueeze(1)
+        devs = []
+        for k in self.layers:
+            hc = clean_states[k] if self.multi else clean_states[k].unsqueeze(1)
+            if k == self.layer:
+                hs = hc + d
+            else:
+                hs = _at(out.hidden_states[k], rows, positions).float()
+                if not self.multi:
+                    hs = hs.unsqueeze(1)
+            devs.append((hs - hc).norm(dim=-1) / hc.norm(dim=-1).clamp_min(1e-30))
+        return torch.stack(devs)
+
+    def z(self, out, delta: Tensor, clean: dict) -> Tensor:
+        dev = self.devs(out, delta, clean)
+        floor = torch.exp(torch.nan_to_num(self.mean, nan=0.0))
+        logres = 0.5 * torch.log(dev.pow(2) + floor.pow(2))
+        z = (logres - torch.nan_to_num(self.mean, nan=0.0)) / self.sd
+        return torch.where(self.valid, z, torch.full_like(z, float("-inf")))
+
+    def penalty(self, out, delta: Tensor, clean: dict) -> Tensor:
+        z = self.z(out, delta, clean)
+        zk = torch.where(self.valid, z, torch.full_like(z, -1e4))
+        F = torch.nn.functional
+        if self.rule == "layer":
+            excess = F.softplus(self.beta * (zk - self.sigma_target)) / self.beta
+            return (excess * self.keep.unsqueeze(0)).sum(dim=(0, 2))
+        # the deployed rule: a run of min_run ADJACENT layers over sigma, or one layer over
+        # sigma_any. Soft AND over each window as a product of sigmoids; the attacker may
+        # leave up to min_run-1 adjacent layers over sigma for free
+        over = torch.sigmoid(self.beta * (zk - self.sigma_target))
+        runs = torch.zeros_like(zk[0])
+        for i in range(zk.shape[0] - self.min_run + 1):
+            runs = runs + torch.prod(over[i:i + self.min_run], dim=0)
+        anyx = (F.softplus(self.beta * (zk - self.sigma_any_target)) / self.beta).sum(dim=0)
+        return ((runs + anyx) * self.keep).sum(dim=-1)
+
+    @torch.no_grad()
+    def worst_z(self, delta: Tensor, clean: dict) -> tuple[Tensor, Tensor]:
+        """Per row: the largest surrogate z over layers and positions, and the sd behind it."""
+        out, _ = _run_with_delta(clean, self.layer, delta, want_states=True)
+        z = self.z(out, delta, clean)
+        z = torch.where(self.keep.unsqueeze(0) > 0, z, torch.full_like(z, float("-inf")))
+        flat = z.permute(1, 0, 2).reshape(z.shape[1], -1)
+        best = flat.argmax(dim=-1)
+        sd_flat = self.sd.permute(1, 0, 2).reshape(z.shape[1], -1)
+        return flat.max(dim=-1).values, sd_flat.gather(-1, best.unsqueeze(-1)).squeeze(-1)
+
+    @torch.no_grad()
+    def report(self, delta: Tensor, clean: dict) -> list[dict]:
+        out, _ = _run_with_delta(clean, self.layer, delta, want_states=True)
+        z = self.z(out, delta, clean).max(dim=-1).values
+        sigma, sigma_any = float(self.cal["sigma"]), float(self.cal.get("sigma_any", float("inf")))
+        reports = []
+        for b in range(z.shape[1]):
+            by_layer = {k: float(z[i, b]) for i, k in enumerate(self.layers) if math.isfinite(float(z[i, b]))}
+            fired = [k for k, v in by_layer.items() if v > sigma]
+            run = best = 0
+            for k in self.layers:
+                run = run + 1 if k in fired else 0
+                best = max(best, run)
+            n_any = sum(v > sigma_any for v in by_layer.values())
+            reports.append({
+                "z_surrogate_by_layer": by_layer,
+                "z_surrogate_max": max(by_layer.values()) if by_layer else float("nan"),
+                "z_surrogate_over": len(fired),
+                "z_surrogate_run": best,
+                "z_surrogate_any": n_any,
+                "flagged_surrogate": bool(best >= self.min_run or n_any > 0),
+                "z_surrogate_roles": self.roles[b],
+            })
+        return reports
 
 
 @torch.no_grad()
@@ -454,6 +587,8 @@ def _project(
     constraint: str,
     max_backoff: int = MAX_BACKOFF,
     round_dtype: torch.dtype | None = None,
+    detector: "DetectorSurrogate | None" = None,
+    z_target: float | None = None,
 ) -> Tensor:
     model, _ = require_model()
     h_norm = clean["h_norm_at"] if delta.dim() == 3 else clean["h_norm"]
@@ -478,6 +613,23 @@ def _project(
         return out
 
     delta = ball(delta)
+    if constraint == "detector":
+        # the detector IS the constraint: shrink each row until the surrogate's worst
+        # layer sits at z_target. z is log-scale in the delta, so the factor that lands
+        # there is exp((target - z) * sd); the floor term makes that an over-estimate
+        # near the floor, hence the loop. The norm ball above stays as an outer bound.
+        if detector is None or z_target is None:
+            raise ValueError("constraint 'detector' needs --detector_cal")
+        for _ in range(max_backoff):
+            zmax, sd = detector.worst_z(delta, clean)
+            over = zmax - z_target
+            if bool((over <= 0).all()):
+                break
+            factor = torch.where(over > 0, torch.exp(-(over + 0.1) * sd), torch.ones_like(over))
+            while factor.dim() < delta.dim():
+                factor = factor.unsqueeze(-1)
+            delta = ball(delta * factor)
+        return delta
     if budget <= 0 or (constraint == "injection" and layer < model.config.num_hidden_layers):
         return delta
 
@@ -530,6 +682,12 @@ def pgd_attack_batch(
     position: str = "last",
     n_positions: int = 1,
     delta_dtype: torch.dtype | None = None,
+    detector_cal: dict | None = None,
+    penalty_weight: float = 1.0,
+    penalty_sigma: float | None = None,
+    penalty_beta: float = 4.0,
+    penalty_rule: str = "layer",
+    penalty_warm_start: int = 0,
 ) -> list[dict]:
     if objective not in OBJECTIVES:
         raise ValueError(f"objective must be one of {OBJECTIVES}, got {objective!r}")
@@ -544,6 +702,11 @@ def pgd_attack_batch(
     multi = m > 1
     clean = clean_reference(prompts, layer, targets, position=position, n_positions=m)
     device = model_device()
+    detector = None
+    if detector_cal is not None:
+        target = penalty_sigma if penalty_sigma is not None else float(detector_cal["sigma"]) - 0.5
+        detector = DetectorSurrogate(detector_cal, clean, layer, sigma_target=target, beta=penalty_beta,
+                                     rule=penalty_rule)
     batch, hidden = clean["batch"], model.config.hidden_size
     radius = budget * (clean["h_norm_at"] if multi else clean["h_norm"])
     lr0 = (0.1 * radius if lr is None
@@ -569,10 +732,14 @@ def pgd_attack_batch(
         # a masked slot has radius 0, so it starts and stays at zero
         inits.append((f"random{r}", v / v.norm(dim=-1, keepdim=True) * radius.cpu().unsqueeze(-1)))
 
+    if constraint == "detector" and detector is None:
+        raise ValueError("constraint 'detector' needs a detector calibration (detector_cal)")
+
     def project(d: Tensor) -> Tensor:
         return _project(d, budget=budget, clean=clean, layer=layer,
                         constraint=constraint, max_backoff=max_backoff,
-                        round_dtype=delta_dtype)
+                        round_dtype=delta_dtype, detector=detector,
+                        z_target=detector.sigma_target if detector is not None else None)
 
     best: list[dict | None] = [None] * batch
     best_delta = torch.zeros(*shape, device=device)
@@ -581,9 +748,12 @@ def pgd_attack_batch(
         delta = project(init.to(device=device, dtype=torch.float32))
         for step in range(steps):
             leaf = delta.detach().clone().requires_grad_(True)
-            out, _ = _run_with_delta(clean, layer, leaf, want_states=False)
+            penalise = detector is not None and step >= penalty_warm_start
+            out, _ = _run_with_delta(clean, layer, leaf, want_states=penalise)
             logits = out.logits[clean["rows"], clean["read_positions"]].float()
             value = _objective(logits, objective, clean, word_pos, word_neg, out.logits)
+            if penalise:
+                value = value - penalty_weight * detector.penalty(out, leaf, clean)
             (grad,) = torch.autograd.grad(value.sum(), leaf)
             grad_norm = grad.norm(dim=-1, keepdim=True)
             if not bool(torch.isfinite(grad_norm).all()):
@@ -598,12 +768,19 @@ def pgd_attack_batch(
             layer, delta, clean=clean,
             word_pos=word_pos, word_neg=word_neg, budget=budget,
         )
+        if detector is not None:
+            for record, rep_ in zip(records, detector.report(delta, clean)):
+                record.update(rep_)
+
+        def rank(r: dict) -> tuple:
+            under = (not r.get("flagged_surrogate", False)) if detector is not None else True
+            return (under, r["flip"], r[f"obj_{objective}"])
+
         for b, record in enumerate(records):
             record["init"] = name
             restarts[b].append(record)
             prev = best[b]
-            score = (record["flip"], record[f"obj_{objective}"])
-            if prev is None or score > (prev["flip"], prev[f"obj_{objective}"]):
+            if prev is None or rank(record) > rank(prev):
                 best[b] = record
                 best_delta[b] = delta[b]
 
@@ -628,6 +805,10 @@ def pgd_attack_batch(
             "constraint": constraint,
             "n_restarts": n_restarts,
             "delta_dtype": None if delta_dtype is None else str(delta_dtype).split(".")[-1],
+            "detector_penalty": None if detector is None else {
+                "weight": penalty_weight, "sigma_target": detector.sigma_target,
+                "beta": penalty_beta, "sigma": float(detector_cal["sigma"]),
+                "rule": penalty_rule, "warm_start": penalty_warm_start},
             "seed": seeds[b],
             "best_init": record["init"],
             "restarts": restarts[b],
@@ -822,11 +1003,37 @@ def main():
                              "stay float32. Off by default: measured fp32-vs-fp16 "
                              "disagreement at the injection layer is 0.6-0.9%%, so this "
                              "removes a sub-percent gap rather than a large one")
+    parser.add_argument("--detector_cal", type=Path, default=None,
+                        help="a role_z detector calibration JSON (e.g. results/<slug>_fp16/sipit/"
+                             "detector_calibration_rolezlog_k1_fpr5.json). When set, the PGD "
+                             "objective is penalised by a differentiable surrogate of that "
+                             "detector at the injected positions, so the attacker optimises "
+                             "AGAINST the detector rather than merely under a norm budget")
+    parser.add_argument("--penalty_weight", type=float, default=1.0,
+                        help="lambda on the detector penalty (objective units per sigma-excess)")
+    parser.add_argument("--penalty_sigma", type=float, default=None,
+                        help="hold the surrogate z under this at every layer; default: the "
+                             "calibration's sigma minus 0.5")
+    parser.add_argument("--penalty_beta", type=float, default=4.0,
+                        help="softplus sharpness of the hinge above --penalty_sigma")
+    parser.add_argument("--penalty_rule", type=str, default="layer", choices=("layer", "run"),
+                        help="layer: hold EVERY downstream layer under sigma (stricter than "
+                             "deployed). run: the deployed rule -- penalise a run of min_run "
+                             "adjacent layers over sigma, or any layer over sigma_any, so up "
+                             "to min_run-1 adjacent layers may exceed sigma for free")
+    parser.add_argument("--penalty_warm_start", type=int, default=0,
+                        help="run this many steps WITHOUT the penalty first, i.e. find a "
+                             "working attack and then hide it, instead of starting from the "
+                             "penalty's basin (which stalled at 0.30 on gpt2)")
     parser.add_argument("--budget_frac", type=float, default=0.85,
                         help="fraction of rel_tol to sit under (default: 0.85)")
     parser.add_argument("--rel_tol", type=float, default=None,
                         help="the detection threshold the budget was cut from, used for the "
                              "det@L / det>=L columns; default budget / budget_frac")
+    # 'detector': the surrogate detector is the constraint -- each step is projected back
+    # to surrogate z <= --penalty_sigma at every downstream layer (the norm --budget is only
+    # an outer bound), so the attack is the strongest one the alarm admits. Needs
+    # --detector_cal; --penalty_weight may be 0 there.
     parser.add_argument("--constraints", type=str, default="all,injection",
                         help="'all' caps every layer >= L (the honest multi-layer auditor); "
                              "'injection' caps layer L alone, which is what steer_audit "
@@ -876,12 +1083,17 @@ def main():
         raise SystemExit(f"--budget must be positive, got {budget:g}")
     rel_tol = args.rel_tol if args.rel_tol is not None else _ratio(budget, args.budget_frac)
     delta_dtype = DTYPES[args.delta_dtype] if args.delta_dtype else None
+    detector_cal = json.loads(args.detector_cal.read_text()) if args.detector_cal else None
+    if detector_cal is not None and detector_cal.get("statistic") != "role_z":
+        raise SystemExit(f"{args.detector_cal}: the surrogate is built for statistic role_z, "
+                         f"got {detector_cal.get('statistic')!r}")
 
     behavior = behaviors.load_behavior(args.behavior)
     arm_name = args.arm or behavior.default_arm
     if args.out is None:
-        stem = (f"pgd_{args.objective}_b{budget:g}" if behavior.name == "sentiment"
-                else f"pgd_{behavior.name}_{arm_name}_{args.objective}_b{budget:g}")
+        aware = "_aware" if detector_cal is not None else ""
+        stem = (f"pgd_{args.objective}{aware}_b{budget:g}" if behavior.name == "sentiment"
+                else f"pgd_{behavior.name}_{arm_name}_{args.objective}{aware}_b{budget:g}")
         if args.position != "last":
             stem += f"_{args.position}"
         if args.n_positions != 1:
@@ -992,6 +1204,11 @@ def main():
         "rel_tol": rel_tol,
         "objective": args.objective,
         "delta_dtype": args.delta_dtype,
+        "detector_cal": str(args.detector_cal) if args.detector_cal else None,
+        "penalty_weight": args.penalty_weight if args.detector_cal else None,
+        "penalty_sigma": args.penalty_sigma,
+        "penalty_rule": args.penalty_rule if args.detector_cal else None,
+        "penalty_warm_start": args.penalty_warm_start if args.detector_cal else None,
     }
     rows = list(done.values())
     deltas: dict[str, Tensor] = {}
@@ -1024,6 +1241,9 @@ def main():
                             max_backoff=args.max_backoff, targets=batch_targets,
                             position=args.position, n_positions=n_positions,
                             delta_dtype=delta_dtype,
+                            detector_cal=detector_cal, penalty_weight=args.penalty_weight,
+                            penalty_sigma=args.penalty_sigma, penalty_beta=args.penalty_beta,
+                            penalty_rule=args.penalty_rule, penalty_warm_start=args.penalty_warm_start,
                         )
                         batch_deltas = [r.pop("delta") for r in results]
                         records = []

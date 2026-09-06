@@ -27,6 +27,10 @@
 #                     tag renames every derived path, so results/<slug>_T/sipit and
 #                     data/activations/<slug>_T are symlinked to the _fp16 trees when
 #                     absent -- calibration and vocab table are shared, rows are not
+#   --attack_args S   extra flags passed verbatim to pgd_attack.py, e.g.
+#                     --attack_args "--detector_cal results/<slug>_fp16/sipit/<cal>.json --penalty_weight 1"
+#                     for the detector-aware attacker; pair with --tag so its rows
+#                     never share a tree with the plain attack's
 #   --force           redo the attack even if its deltas exist
 #   --dry_run         print the commands and exit
 #
@@ -39,7 +43,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd); cd "$ROOT"
 MODEL=${1:?usage: pgd_ladder.sh MODEL [options]}; shift
 BEHAVIOR=jbb_refusal; ARM=; OBJECTIVE=; BUDGETS=0.0085,0.02,0.05,0.12,0.30; N=15
 ARMS=pgd,random; LAYER_FRAC=0.7; LAYER=; STEPS=40; RESTARTS=1
-CALS=detector_calibration_rolezlog_k1_fpr5.json; STAGES=; FORCE=0; DRY=0; TAG=; BATCH=
+CALS=detector_calibration_rolezlog_k1_fpr5.json; STAGES=; FORCE=0; DRY=0; TAG=; BATCH=; ATTACK_ARGS=
 while [[ $# -gt 0 ]]; do
   case $1 in
     --behavior) BEHAVIOR=$2; shift 2 ;;
@@ -56,9 +60,10 @@ while [[ $# -gt 0 ]]; do
     --stages) STAGES=$2; shift 2 ;;
     --tag) TAG=$2; shift 2 ;;
     --batch_size) BATCH=$2; shift 2 ;;
+    --attack_args) ATTACK_ARGS=$2; shift 2 ;;
     --force) FORCE=1; shift ;;
     --dry_run) DRY=1; shift ;;
-    -h|--help) sed -n '2,37p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,41p' "$0"; exit 0 ;;
     *) echo "unknown flag: $1" >&2; exit 1 ;;
   esac
 done
@@ -112,7 +117,7 @@ for B in "${BLIST[@]}"; do
       run env AAT_DTYPE=float32 uv run src/pgd_attack.py --model_name "$MODEL" --dtype float32 \
         --budget "$B" "${LAYER_ARGS[@]}" --behavior "$BEHAVIOR" --arm "$ARM" --objective "$OBJECTIVE" \
         --n_prompts "$N" --steps "$STEPS" --n_restarts "$RESTARTS" --constraints all --arms "$ARMS" \
-        ${BATCH:+--batch_size "$BATCH"} --save_deltas --force --out "$STEM.jsonl" || continue
+        ${BATCH:+--batch_size "$BATCH"} $ATTACK_ARGS --save_deltas --force --out "$STEM.jsonl" || continue
     fi
   fi
   if has detect; then
