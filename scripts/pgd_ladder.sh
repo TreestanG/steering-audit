@@ -12,6 +12,8 @@
 #   --n_prompts N     15 (default). Later stages reuse it: the prompt set is stratified,
 #                     so a different N scores a different set of prompts
 #   --arms L          pgd,random (default)
+#   --constraint C    all (default) | injection | detector -- the attack's scope, carried
+#                     into detect and decode so their rows key on the same scope
 #   --layer_frac F    0.7 (default)    --layer N       inject at this layer instead
 #   --steps N         40 (default)     --n_restarts N  1 (default): A4's ladder settings
 #   --batch_size N    prompts per attack forward (default 25). fp32 weights plus a backward
@@ -42,7 +44,7 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd); cd "$ROOT"
 MODEL=${1:?usage: pgd_ladder.sh MODEL [options]}; shift
 BEHAVIOR=jbb_refusal; ARM=; OBJECTIVE=; BUDGETS=0.0085,0.02,0.05,0.12,0.30; N=15
-ARMS=pgd,random; LAYER_FRAC=0.7; LAYER=; STEPS=40; RESTARTS=1
+ARMS=pgd,random; LAYER_FRAC=0.7; LAYER=; STEPS=40; RESTARTS=1; SCOPE=all
 CALS=detector_calibration_rolezlog_k1_fpr5.json; STAGES=; FORCE=0; DRY=0; TAG=; BATCH=; ATTACK_ARGS=
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -52,6 +54,7 @@ while [[ $# -gt 0 ]]; do
     --budgets) BUDGETS=$2; shift 2 ;;
     --n_prompts) N=$2; shift 2 ;;
     --arms) ARMS=$2; shift 2 ;;
+    --constraint) SCOPE=$2; shift 2 ;;
     --layer_frac) LAYER_FRAC=$2; shift 2 ;;
     --layer) LAYER=$2; shift 2 ;;
     --steps) STEPS=$2; shift 2 ;;
@@ -63,7 +66,7 @@ while [[ $# -gt 0 ]]; do
     --attack_args) ATTACK_ARGS=$2; shift 2 ;;
     --force) FORCE=1; shift ;;
     --dry_run) DRY=1; shift ;;
-    -h|--help) sed -n '2,41p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,43p' "$0"; exit 0 ;;
     *) echo "unknown flag: $1" >&2; exit 1 ;;
   esac
 done
@@ -116,7 +119,7 @@ for B in "${BLIST[@]}"; do
       say "b=$B attack (fp32)"
       run env AAT_DTYPE=float32 uv run src/pgd_attack.py --model_name "$MODEL" --dtype float32 \
         --budget "$B" "${LAYER_ARGS[@]}" --behavior "$BEHAVIOR" --arm "$ARM" --objective "$OBJECTIVE" \
-        --n_prompts "$N" --steps "$STEPS" --n_restarts "$RESTARTS" --constraints all --arms "$ARMS" \
+        --n_prompts "$N" --steps "$STEPS" --n_restarts "$RESTARTS" --constraints "$SCOPE" --arms "$ARMS" \
         ${BATCH:+--batch_size "$BATCH"} $ATTACK_ARGS --save_deltas --force --out "$STEM.jsonl" || continue
     fi
   fi
@@ -124,7 +127,7 @@ for B in "${BLIST[@]}"; do
     say "b=$B detect (fp16)"
     run uv run src/pgd_sipit.py --model_name "$MODEL" --dtype float16 --deltas "${STEM}_deltas.pt" \
       --objective "$OBJECTIVE" --behavior "$BEHAVIOR" --arm "$ARM" --n_prompts "$N" --arms "$ARMS" \
-      --calibrations "$CALS"
+      --constraint "$SCOPE" --calibrations "$CALS"
   fi
   if has decode; then
     if [[ -f ${STEM}_gen.json ]]; then
@@ -132,7 +135,7 @@ for B in "${BLIST[@]}"; do
     else
       say "b=$B decode"
       run uv run src/pgd_generate.py --model_name "$MODEL" --dtype float16 --deltas "${STEM}_deltas.pt" \
-        --behavior "$BEHAVIOR" --arm "$ARM" --n_prompts "$N" --arms "$ARMS"
+        --behavior "$BEHAVIOR" --arm "$ARM" --n_prompts "$N" --arms "$ARMS" --constraint "$SCOPE"
     fi
   fi
   [[ -f ${STEM}_gen.json || $DRY -eq 1 ]] && GENS+=("${STEM}_gen.json")
