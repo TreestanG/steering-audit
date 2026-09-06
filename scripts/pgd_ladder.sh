@@ -14,6 +14,9 @@
 #   --arms L          pgd,random (default)
 #   --layer_frac F    0.7 (default)    --layer N       inject at this layer instead
 #   --steps N         40 (default)     --n_restarts N  1 (default): A4's ladder settings
+#   --batch_size N    prompts per attack forward (default 25). fp32 weights plus a backward
+#                     over chat-length prompts overflow a card at the default: 3B on 24 GB
+#                     and 7B on 48 GB both need 3-4
 #   --calibrations L  detector_calibration_rolezlog_k1_fpr5.json (default); the first is
 #                     the one the join uses
 #   --stages L        attack,detect,decode,judge,join (default: all that apply). The judge
@@ -36,7 +39,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd); cd "$ROOT"
 MODEL=${1:?usage: pgd_ladder.sh MODEL [options]}; shift
 BEHAVIOR=jbb_refusal; ARM=; OBJECTIVE=; BUDGETS=0.0085,0.02,0.05,0.12,0.30; N=15
 ARMS=pgd,random; LAYER_FRAC=0.7; LAYER=; STEPS=40; RESTARTS=1
-CALS=detector_calibration_rolezlog_k1_fpr5.json; STAGES=; FORCE=0; DRY=0; TAG=
+CALS=detector_calibration_rolezlog_k1_fpr5.json; STAGES=; FORCE=0; DRY=0; TAG=; BATCH=
 while [[ $# -gt 0 ]]; do
   case $1 in
     --behavior) BEHAVIOR=$2; shift 2 ;;
@@ -52,9 +55,10 @@ while [[ $# -gt 0 ]]; do
     --calibrations) CALS=$2; shift 2 ;;
     --stages) STAGES=$2; shift 2 ;;
     --tag) TAG=$2; shift 2 ;;
+    --batch_size) BATCH=$2; shift 2 ;;
     --force) FORCE=1; shift ;;
     --dry_run) DRY=1; shift ;;
-    -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,37p' "$0"; exit 0 ;;
     *) echo "unknown flag: $1" >&2; exit 1 ;;
   esac
 done
@@ -108,7 +112,7 @@ for B in "${BLIST[@]}"; do
       run env AAT_DTYPE=float32 uv run src/pgd_attack.py --model_name "$MODEL" --dtype float32 \
         --budget "$B" "${LAYER_ARGS[@]}" --behavior "$BEHAVIOR" --arm "$ARM" --objective "$OBJECTIVE" \
         --n_prompts "$N" --steps "$STEPS" --n_restarts "$RESTARTS" --constraints all --arms "$ARMS" \
-        --save_deltas --force --out "$STEM.jsonl" || continue
+        ${BATCH:+--batch_size "$BATCH"} --save_deltas --force --out "$STEM.jsonl" || continue
     fi
   fi
   if has detect; then

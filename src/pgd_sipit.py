@@ -304,6 +304,8 @@ def main():
     if rows_path.exists():
         for line in rows_path.read_text().splitlines():
             r = json.loads(line)
+            if r.get("n_prompts", args.n_prompts) != args.n_prompts:
+                continue
             done.add((r.get("behavior", "sentiment"), r.get("test_arm", ""),
                       r["objective"], positions_key(r["arm"], r.get("n_positions", 1)),
                       r["constraint"], r["budget"], r["arm"], r["prompt_index"],
@@ -367,7 +369,7 @@ def main():
                     # the prompt SET is part of the cell: a clean control fitted on
                     # 7-token sentiment fragments is not the control for 40-token
                     # chat-templated jailbreak prompts
-                    "behavior": behavior.name, "test_arm": arm_name,
+                    "behavior": behavior.name, "test_arm": arm_name, "n_prompts": args.n_prompts,
                     "constraint": args.constraint, "inj_layer": inj_layer,
                     "layer": layer, "n_target": len(gold), "n_recovered": len(steps),
                     "exact": [s["token"] for s in steps] == gold[:len(steps)],

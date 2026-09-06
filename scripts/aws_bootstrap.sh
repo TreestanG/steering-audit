@@ -43,7 +43,7 @@ uv sync
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 uv run python -c "import torch; assert torch.cuda.is_available(), 'no CUDA device'; print(torch.__version__, torch.cuda.get_device_name(0))"
 MEM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1)
-KV=$(( (MEM_MB - 8000) * 1000000 / 2 ))
+KV=$(( (MEM_MB - 8000) * 1000000 / 3 ))
 grep -q AAT_KV_BUDGET ~/.profile 2> /dev/null || echo "export AAT_KV_BUDGET=$KV" >> ~/.profile
 echo "ready: $DIR  AAT_KV_BUDGET=$KV  (git pull on the box needs ssh -A)"
 REMOTE
