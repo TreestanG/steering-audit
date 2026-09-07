@@ -76,6 +76,26 @@ def match_tol(target: Tensor, rel_tol: float, abs_tol: float) -> float:
     return rel_tol * float(target.norm())
 
 
+# --stop_on: 'miss' ends a scan at the first position over tolerance (the deployment
+# rule, where gold is unknown); 'wrong' ends it only where the recovered token is known
+# to differ from gold, so a correct token over the numerics floor -- Qwen's massive
+# first-token state collapsing in the last block -- no longer truncates a clean-bank or
+# stage-2 row; 'never' scans every position regardless.
+STOP_MODES: dict[str, bool | str] = {"miss": True, "wrong": "wrong", "never": False}
+
+
+def stop_mode_name(stop_on_fail: bool | str) -> str:
+    return next(k for k, v in STOP_MODES.items() if v == stop_on_fail)
+
+
+def _halts(step: dict, stop_on_fail: bool | str) -> bool:
+    if not stop_on_fail:
+        return False
+    if stop_on_fail == "wrong":
+        return step.get("correct") is False
+    return not step["matched"]
+
+
 def load_vocab_table(
     path: str, expect_model: str | None = None, expect_dtype: str | None = None
 ) -> tuple[Tensor, str]:
@@ -349,7 +369,7 @@ def sipit_multi(
     abs_tol: float = 0.0,
     schedule: tuple[int, ...] = DEFAULT_SCHEDULE,
     exhaustive: bool = False,
-    stop_on_fail: bool = True,
+    stop_on_fail: bool | str = True,
     gold: list[int] | None = None,
 ) -> tuple[dict[int, list[dict]], set[int]]:
     """sipit() at several layers of ONE sequence from a shared scan.
@@ -380,7 +400,7 @@ def sipit_multi(
                           h_norm=float(targets[l][0].norm()), tried=table.shape[0],
                           exhaustive=True, gold=gold_at(0))]
         del table
-    open_layers = {l for l in layers if not (stop_on_fail and not steps[l][0]["matched"])}
+    open_layers = {l for l in layers if not _halts(steps[l][0], stop_on_fail)}
     diverged: set[int] = set()
     if seq_len == 1 or not open_layers:
         return steps, diverged
@@ -407,7 +427,7 @@ def sipit_multi(
         )
         for l in sorted(open_layers):
             steps[l].append(res[l])
-            if stop_on_fail and not res[l]["matched"]:
+            if _halts(res[l], stop_on_fail):
                 open_layers.discard(l)
         if not open_layers:
             break
@@ -499,7 +519,7 @@ def sipit(
     abs_tol: float = 0.0,
     schedule: tuple[int, ...] = DEFAULT_SCHEDULE,
     exhaustive: bool = False,
-    stop_on_fail: bool = True,
+    stop_on_fail: bool | str = True,
     gold: list[int] | None = None,
     known_steps: list[dict] | None = None,
 ) -> list[dict]:
@@ -518,10 +538,9 @@ def sipit(
 
     if known_steps:
         steps = [dict(s) for s in known_steps[: target.shape[0]]]
-        if stop_on_fail:
-            for q, s in enumerate(steps):
-                if not s["matched"]:
-                    return steps[: q + 1]
+        for q, s in enumerate(steps):
+            if _halts(s, stop_on_fail):
+                return steps[: q + 1]
         if len(steps) >= target.shape[0]:
             return steps
         cache, logits = prefix_cache([s["token"] for s in steps])
@@ -543,7 +562,7 @@ def sipit(
         )
     )
     token0 = steps[0]["token"]
-    if stop_on_fail and not steps[0]["matched"]:
+    if _halts(steps[0], stop_on_fail):
         return steps
     if target.shape[0] == 1:
         return steps
@@ -566,7 +585,7 @@ def _continue(steps, cache, prefix_len, logits, target, layer, *, rel_tol, abs_t
             gold=gold_at(t),
         )
         steps.append(step)
-        if stop_on_fail and not step["matched"]:
+        if _halts(step, stop_on_fail):
             break
 
         cache, hidden_last = encode_step(
@@ -589,7 +608,7 @@ def invert_file(
     abs_tol: float,
     schedule: tuple[int, ...],
     exhaustive: bool,
-    stop_on_fail: bool,
+    stop_on_fail: bool | str,
     max_len: int,
     noise: float,
 ) -> dict:
@@ -673,6 +692,7 @@ def invert_file(
         "exact": exact,
         "first_fail": first_fail,
         "first_wrong": first_wrong,
+        "stop_on": stop_mode_name(stop_on_fail),
         "silent_corruption": (first_wrong is not None
                               and (first_fail is None or first_wrong < first_fail)),
         "steps": [
@@ -705,7 +725,7 @@ def run_layer(
     abs_tol: float,
     schedule: tuple[int, ...],
     exhaustive: bool,
-    stop_on_fail: bool,
+    stop_on_fail: bool | str,
     max_len: int,
     noise: float,
 ) -> tuple[int, int]:
@@ -825,7 +845,13 @@ def main():
         action="store_true",
         help="scan all |V| per position — needed for true runner-up gaps",
     )
-    parser.add_argument("--no_stop_on_fail", action="store_true")
+    parser.add_argument("--stop_on", type=str, default="miss", choices=list(STOP_MODES),
+                        help="miss (default): stop at the first position over tolerance. "
+                             "wrong: stop only where the recovered token differs from the "
+                             "bank's gold text, so a correct token over the fp16 floor "
+                             "(Qwen's first-token state collapsing in the last block) does "
+                             "not truncate the row. never: scan every position")
+    parser.add_argument("--no_stop_on_fail", action="store_true", help="alias for --stop_on never")
     parser.add_argument(
         "--data_path",
         type=str,
@@ -861,7 +887,9 @@ def main():
     dtype = DTYPES[args.dtype]
     rel_tol: float = rel_tol_for(dtype) if args.rel_tol is None else float(args.rel_tol)
     model, tokenizer = load_model(args.model_name, dtype=dtype, device=args.device)
-    logger.info("model on %s, %s, rel_tol %g", model_device(), args.dtype, rel_tol)
+    stop_on = "never" if args.no_stop_on_fail else args.stop_on
+    logger.info("model on %s, %s, rel_tol %g, stop_on %s", model_device(), args.dtype, rel_tol,
+                stop_on)
 
     gold_by_id: dict[str, str] = {}
     bank = Path(args.data_path)
@@ -873,7 +901,7 @@ def main():
         abs_tol=args.tol,
         schedule=schedule,
         exhaustive=args.exhaustive,
-        stop_on_fail=not args.no_stop_on_fail,
+        stop_on_fail=STOP_MODES[stop_on],
         max_len=args.max_len,
         noise=args.noise,
     )

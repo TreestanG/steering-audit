@@ -222,6 +222,18 @@ def main():
                         default="detector_calibration.json,detector_calibration_k1.json")
     parser.add_argument("--sanity_only", action="store_true")
     parser.add_argument("--score_only", action="store_true")
+    parser.add_argument("--stop_on", type=str, default="miss", choices=list(sipit.STOP_MODES),
+                        help="when a scan stops: miss (default) at the first position over "
+                             "tolerance; wrong only where the recovered token differs from "
+                             "gold, so the fp16 floor at a template position does not "
+                             "truncate the row before the injected one (see sipit.py)")
+    parser.add_argument("--redo_layers", type=str, default="",
+                        help="comma-separated layers at which THIS run's cells (its clean "
+                             "control and its budget's arms, at this prompt count) that were "
+                             "inverted under a different --stop_on are dropped and "
+                             "re-inverted instead of resumed. Other cells and rows already "
+                             "under this --stop_on are untouched, so the ladder's per-budget "
+                             "calls neither undo each other nor strand another cell")
     parser.add_argument("--no_reuse_clean", action="store_true",
                         help="re-invert every position of a steered prompt instead of "
                              "reusing the clean row for the positions ahead of the "
@@ -299,13 +311,25 @@ def main():
         args.vocab_path or str(vocab_table_path(args.model_name)),
         expect_model=args.model_name, expect_dtype=args.dtype)
 
+    stop_on = sipit.STOP_MODES[args.stop_on]
+    redo = {int(x) for x in args.redo_layers.split(",") if x}
     done = set()
     clean_steps: dict[tuple, tuple[int, list[dict]]] = {}
     if rows_path.exists():
+        kept = []
         for line in rows_path.read_text().splitlines():
             r = json.loads(line)
             if r.get("n_prompts", args.n_prompts) != args.n_prompts:
+                kept.append(line)
                 continue
+            mine = (r.get("behavior", "sentiment") == behavior.name
+                    and r.get("test_arm", "") == arm_name and r["constraint"] == args.constraint
+                    and (r["arm"] == CLEAN_ARM
+                         or (r["arm"] in arms and r["budget"] == budget
+                             and r["objective"] == objective_key(r["arm"], args.objective))))
+            if r["layer"] in redo and mine and r.get("stop_on", "miss") != args.stop_on:
+                continue
+            kept.append(line)
             done.add((r.get("behavior", "sentiment"), r.get("test_arm", ""),
                       r["objective"], positions_key(r["arm"], r.get("n_positions", 1)),
                       r["constraint"], r["budget"], r["arm"], r["prompt_index"],
@@ -314,6 +338,10 @@ def main():
                 clean_steps.setdefault((r.get("behavior", "sentiment"), r.get("test_arm", ""),
                                         r["prompt_index"], r["layer"]),
                                        (r["n_target"], r["steps"]))
+        if redo:
+            dropped = sum(1 for _ in rows_path.read_text().splitlines()) - len(kept)
+            rows_path.write_text("".join(f"{line}\n" for line in kept))
+            logger.info("dropped %d rows at layers %s for re-inversion", dropped, sorted(redo))
         logger.info("resuming: %d rows already on disk", len(done))
 
     cells = [(CLEAN_ARM, 0.0, all_layers)] + [(a, budget, steered_layers) for a in arms]
@@ -379,6 +407,7 @@ def main():
                     # detection is never confused with a tolerance detection
                     "inj_matched": all(bool(x["matched"]) for x in inj_steps),
                     "n_injected": len(inj_pos),
+                    "stop_on": args.stop_on,
                     "prefix_reused": len(known) if known else 0,
                     # >1: this row's injected position came out of one candidate scan
                     # shared by that many layers (elapsed is the scan time split evenly)
@@ -416,10 +445,10 @@ def main():
                     t0 = time.time()
                     steps_by, diverged = sipit.sipit_multi(
                         {l: captured[i][l] for l in pending}, vocab_layer_for,
-                        rel_tol=rel_tol, stop_on_fail=True, gold=gold)
+                        rel_tol=rel_tol, stop_on_fail=stop_on, gold=gold)
                     for l in sorted(diverged):
                         steps_by[l] = sipit.sipit(captured[i][l], l, vocab_layer_for(l),
-                                                  rel_tol=rel_tol, stop_on_fail=True, gold=gold,
+                                                  rel_tol=rel_tol, stop_on_fail=stop_on, gold=gold,
                                                   known_steps=steps_by[l])
                     per = (time.time() - t0) / len(pending)
                     for l in pending:
@@ -462,7 +491,7 @@ def main():
                                              gold, len(gold) - len(inj_pos))
                     t0 = time.time()
                     steps = sipit.sipit(captured[i][layer], layer, vocab_layer,
-                                        rel_tol=rel_tol, stop_on_fail=True, gold=gold,
+                                        rel_tol=rel_tol, stop_on_fail=stop_on, gold=gold,
                                         known_steps=known)
                     emit(i, layer, steps, known, time.time() - t0)
                 del vocab_layer

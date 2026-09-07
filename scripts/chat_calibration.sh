@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
 # Chat-format calibration bank for one model.
 #
-#   scripts/chat_calibration.sh build MODEL [--per_category N] [--batches B] [--dtype D]
+#   scripts/chat_calibration.sh build MODEL [--per_category N] [--batches B] [--dtype D] [--stop_on miss|wrong]
 #   scripts/chat_calibration.sh refit MODEL K [--deltas PATH] [--dtype D]
+#   scripts/chat_calibration.sh repair MODEL K --layers L1,L2 [--stop_on wrong] [--dtype D]
 #
 # build   wraps bank prompts in MODEL's chat template, saves activations and inverts
 #         them in B category-stratified batches (N prompts per category, default 15 x 3)
 #         into results/<slug>/sipit/chat_bank/layers_ext_b<i>. Batches finish
 #         independently; a batch whose last layer exists is skipped on a re-run.
 #         About 6 min a prompt on Qwen-0.5B on the Mac.
+# repair  re-inverts the given layers of chat_bank/layers and the first K extension
+#         batches with --stop_on (default wrong), keeping the originals as
+#         sipit_layer_LL.jsonl.pre_repair, then runs refit. For layers where the fp16
+#         floor at a template position truncated every row (Qwen-1.5B 27-28).
 # refit   merges chat_bank/layers plus the first K extension batches into
 #         chat_bank_n<N>/layers and refits detector_calibration_{rolezlog_k1,
 #         rolezlog_k1_fpr5,rolez_k1,rolez_k1_fpr5,rolez}_n<N>.json. With --deltas the
@@ -21,12 +26,13 @@ DTYPE=float16
 slug() { uv run python -c "import sys;sys.path.insert(0,'src');from paths import model_slug;print(model_slug('$MODEL'))"; }
 
 build() {
-  local PER=15 BATCHES=3
+  local PER=15 BATCHES=3 STOP=miss
   while [[ $# -gt 0 ]]; do
     case $1 in
       --per_category) PER=$2; shift 2 ;;
       --batches) BATCHES=$2; shift 2 ;;
       --dtype) DTYPE=$2; shift 2 ;;
+      --stop_on) STOP=$2; shift 2 ;;
       *) echo "unknown flag: $1" >&2; exit 1 ;;
     esac
   done
@@ -57,7 +63,7 @@ d=json.load(open('$JSON'))
 print(' '.join('$ACT/$SLUG/'+p['id']+'.pt' for p in d['prompts'] if p['batch']==$B))")
     [[ -n $PTS ]] || { echo "batch $B has no prompts" | tee -a "$LOG"; continue; }
     echo "[$(date)] batch $B start" | tee -a "$LOG"
-    uv run src/sipit.py --model_name "$MODEL" --dtype "$DTYPE" --all_layers \
+    uv run src/sipit.py --model_name "$MODEL" --dtype "$DTYPE" --all_layers --stop_on "$STOP" \
         --data_path "$JSON" --act_path $PTS --out_dir "$OUT" >> "$LOG" 2>&1
     echo "[$(date)] batch $B exit $?" | tee -a "$LOG"
   done
@@ -124,8 +130,58 @@ for f in cals:
 PY
 }
 
+repair() {
+  set -e
+  local K=${1:?usage: chat_calibration.sh repair MODEL K --layers L1,L2 [--stop_on wrong] [--dtype D]}; shift
+  local LAYERS="" STOP=wrong
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --layers) LAYERS=$2; shift 2 ;;
+      --stop_on) STOP=$2; shift 2 ;;
+      --dtype) DTYPE=$2; shift 2 ;;
+      *) echo "unknown flag: $1" >&2; exit 1 ;;
+    esac
+  done
+  [[ -n $LAYERS ]] || { echo "repair needs --layers" >&2; exit 1; }
+  export AAT_DTYPE=$DTYPE
+  local SLUG; SLUG=$(slug)
+  local CB=results/$SLUG/sipit/chat_bank JSON=results/$SLUG/sipit/chat_bank/trajectory_bank_chat_ext.json
+  local ACT=$CB/act LOG=results/$SLUG/logs/chat_bank_repair.log
+  local DIRS=() B L F PTS
+  [[ -d $CB/layers ]] && DIRS+=("$CB/layers")
+  for B in $(seq 1 "$K"); do DIRS+=("$CB/layers_ext_b$B"); done
+  echo "[$(date)] repair $MODEL layers $LAYERS stop_on=$STOP in ${DIRS[*]}" | tee -a "$LOG"
+  for D in "${DIRS[@]}"; do
+    B=${D##*_b}; [[ $D == */layers ]] && B=0
+    if [[ $B == 0 ]]; then
+      PTS=$(uv run python -c "
+import json
+d=json.load(open('$JSON'))
+print(' '.join('$ACT/$SLUG/'+p['id']+'.pt' for p in d['prompts'] if p.get('batch', 0)==0))")
+    else
+      PTS=$(uv run python -c "
+import json
+d=json.load(open('$JSON'))
+print(' '.join('$ACT/$SLUG/'+p['id']+'.pt' for p in d['prompts'] if p['batch']==$B))")
+    fi
+    [[ -n $PTS ]] || { echo "$D: no prompts for batch $B in $JSON" | tee -a "$LOG"; exit 1; }
+    for L in ${LAYERS//,/ }; do
+      F=$D/sipit_layer_$(printf %02d "$L").jsonl
+      [[ -f $F.pre_repair ]] || cp "$F" "$F.pre_repair"
+      echo "[$(date)] $F" | tee -a "$LOG"
+      uv run src/sipit.py --model_name "$MODEL" --dtype "$DTYPE" --layer "$L" --stop_on "$STOP" \
+          --data_path "$JSON" --act_path $PTS --out "$F" >> "$LOG" 2>&1 \
+        || { echo "repair FAILED at $F, see $LOG" | tee -a "$LOG"; exit 1; }
+      grep -E "exact [0-9]+/[0-9]+" "$LOG" | tail -1 | tee -a "$LOG"
+    done
+  done
+  echo "[$(date)] re-inverted; refitting" | tee -a "$LOG"
+  refit "$K" --dtype "$DTYPE"
+}
+
 case $CMD in
   build) build "$@" ;;
   refit) refit "$@" ;;
+  repair) repair "$@" ;;
   *) sed -n '2,16p' "$0"; exit 1 ;;
 esac

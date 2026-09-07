@@ -21,6 +21,8 @@
 #                     and 7B on 48 GB both need 3-4
 #   --calibrations L  detector_calibration_rolezlog_k1_fpr5.json (default); the first is
 #                     the one the join uses
+#   --stop_on S       miss (default) | wrong: when stage 2's inversion stops (see sipit.py)
+#   --redo_layers L   drop stage-2 rows at these layers and re-invert them (pgd_sipit)
 #   --stages L        attack,detect,decode,judge,join (default: all that apply). The judge
 #                     needs the Fireworks key in .env, so on a box without it run
 #                     --stages attack,detect,decode there and --stages judge,join here
@@ -46,6 +48,7 @@ MODEL=${1:?usage: pgd_ladder.sh MODEL [options]}; shift
 BEHAVIOR=jbb_refusal; ARM=; OBJECTIVE=; BUDGETS=0.0085,0.02,0.05,0.12,0.30; N=15
 ARMS=pgd,random; LAYER_FRAC=0.7; LAYER=; STEPS=40; RESTARTS=1; SCOPE=all
 CALS=detector_calibration_rolezlog_k1_fpr5.json; STAGES=; FORCE=0; DRY=0; TAG=; BATCH=; ATTACK_ARGS=
+STOP=miss; REDO=
 while [[ $# -gt 0 ]]; do
   case $1 in
     --behavior) BEHAVIOR=$2; shift 2 ;;
@@ -60,6 +63,8 @@ while [[ $# -gt 0 ]]; do
     --steps) STEPS=$2; shift 2 ;;
     --n_restarts) RESTARTS=$2; shift 2 ;;
     --calibrations) CALS=$2; shift 2 ;;
+    --stop_on) STOP=$2; shift 2 ;;
+    --redo_layers) REDO=$2; shift 2 ;;
     --stages) STAGES=$2; shift 2 ;;
     --tag) TAG=$2; shift 2 ;;
     --batch_size) BATCH=$2; shift 2 ;;
@@ -127,7 +132,7 @@ for B in "${BLIST[@]}"; do
     say "b=$B detect (fp16)"
     run uv run src/pgd_sipit.py --model_name "$MODEL" --dtype float16 --deltas "${STEM}_deltas.pt" \
       --objective "$OBJECTIVE" --behavior "$BEHAVIOR" --arm "$ARM" --n_prompts "$N" --arms "$ARMS" \
-      --constraint "$SCOPE" --calibrations "$CALS"
+      --constraint "$SCOPE" --calibrations "$CALS" --stop_on "$STOP" ${REDO:+--redo_layers "$REDO"}
   fi
   if has decode; then
     if [[ -f ${STEM}_gen.json ]]; then
