@@ -1,5 +1,6 @@
 
 import argparse
+import hashlib
 import json
 import os
 import statistics
@@ -23,6 +24,7 @@ _set_run_tag()
 import behaviors
 import detect
 import prompt_format
+import provenance
 import sipit
 import steered_sipit
 from generate import Intervention
@@ -62,6 +64,24 @@ def positions_key(arm: str, n_positions: int) -> int:
     collapses to one cell.
     """
     return 0 if arm == CLEAN_ARM else n_positions
+
+
+def resume_key(r: dict, fill: dict | None = None) -> tuple | None:
+    """Identity of one inverted (cell, prompt, layer) row, or None when the row cannot
+    be placed: it predates the prompt count, or is an attack row with no delta hash.
+    A same-directory layer or seed sweep writes rows that differ only in the injection
+    layer or the delta, so both are part of the key. `fill` supplies the current run's
+    values for legacy rows the caller has chosen to trust."""
+    attack = r["arm"] != CLEAN_ARM
+    fill = fill or {}
+    n_prompts = r.get("n_prompts", fill.get("n_prompts"))
+    delta = r.get("deltas_sha256", fill.get("deltas_sha256")) if attack else None
+    inj = r.get("inj_layer", fill.get("inj_layer")) if attack else None
+    if n_prompts is None or (attack and not delta):
+        return None
+    return (r.get("behavior", "sentiment"), r.get("test_arm", ""), r["objective"],
+            positions_key(r["arm"], r.get("n_positions", 1)), r["constraint"], r["budget"],
+            r["arm"], r["prompt_index"], r["layer"], inj, delta)
 
 
 def load_deltas(path: Path) -> tuple[int, float, int, dict[tuple[str, str, int], Tensor]]:
@@ -238,6 +258,10 @@ def main():
                         help="re-invert every position of a steered prompt instead of "
                              "reusing the clean row for the positions ahead of the "
                              "injection, which the intervention cannot reach")
+    parser.add_argument("--trust_legacy_rows", action="store_true",
+                        help="resume from rows written before n_prompts and deltas_sha256 "
+                             "were recorded, treating them as this run's. Off by default: "
+                             "such rows cannot be placed and are left on disk unused")
     add_logging_args(parser)
     args = parser.parse_args()
     log_setup(args, default_log=logs_dir(args.model_name) / "pgd_sipit.log")
@@ -254,6 +278,7 @@ def main():
         return
 
     inj_layer, stored_budget, n_positions, deltas = load_deltas(args.deltas)
+    deltas_sha = hashlib.sha256(args.deltas.read_bytes()).hexdigest()
     budget = args.budget if args.budget is not None else stored_budget
     stage1 = stage1_rows(args.deltas)
     arms = [a for a in args.arms.split(",") if a]
@@ -315,12 +340,16 @@ def main():
     redo = {int(x) for x in args.redo_layers.split(",") if x}
     done = set()
     clean_steps: dict[tuple, tuple[int, list[dict]]] = {}
+    fill = ({"n_prompts": args.n_prompts, "deltas_sha256": deltas_sha, "inj_layer": inj_layer}
+            if args.trust_legacy_rows else None)
     if rows_path.exists():
-        kept = []
+        kept, legacy = [], 0
         for line in rows_path.read_text().splitlines():
             r = json.loads(line)
-            if r.get("n_prompts", args.n_prompts) != args.n_prompts:
+            n_rows = r.get("n_prompts", (fill or {}).get("n_prompts"))
+            if n_rows != args.n_prompts:
                 kept.append(line)
+                legacy += n_rows is None
                 continue
             mine = (r.get("behavior", "sentiment") == behavior.name
                     and r.get("test_arm", "") == arm_name and r["constraint"] == args.constraint
@@ -330,10 +359,11 @@ def main():
             if r["layer"] in redo and mine and r.get("stop_on", "miss") != args.stop_on:
                 continue
             kept.append(line)
-            done.add((r.get("behavior", "sentiment"), r.get("test_arm", ""),
-                      r["objective"], positions_key(r["arm"], r.get("n_positions", 1)),
-                      r["constraint"], r["budget"], r["arm"], r["prompt_index"],
-                      r["layer"]))
+            rk = resume_key(r, fill)
+            if rk is None:
+                legacy += 1
+                continue
+            done.add(rk)
             if r["arm"] == CLEAN_ARM:
                 clean_steps.setdefault((r.get("behavior", "sentiment"), r.get("test_arm", ""),
                                         r["prompt_index"], r["layer"]),
@@ -342,6 +372,9 @@ def main():
             dropped = sum(1 for _ in rows_path.read_text().splitlines()) - len(kept)
             rows_path.write_text("".join(f"{line}\n" for line in kept))
             logger.info("dropped %d rows at layers %s for re-inversion", dropped, sorted(redo))
+        if legacy:
+            logger.warning("%d rows lack a prompt count or delta hash and were not resumed; "
+                           "--trust_legacy_rows treats them as this run's", legacy)
         logger.info("resuming: %d rows already on disk", len(done))
 
     cells = [(CLEAN_ARM, 0.0, all_layers)] + [(a, budget, steered_layers) for a in arms]
@@ -350,9 +383,10 @@ def main():
         for arm, cell_budget, layers in cells:
             okey = objective_key(arm, args.objective)
             mkey = positions_key(arm, n_positions)
+            tail = (inj_layer, deltas_sha) if arm != CLEAN_ARM else (None, None)
             todo = [l for l in layers
                     if any((behavior.name, arm_name, okey, mkey, args.constraint,
-                            cell_budget, arm, i, l) not in done
+                            cell_budget, arm, i, l) + tail not in done
                            for i in range(len(prompts)))]
             if not todo:
                 logger.info("%-7s already complete", arm)
@@ -378,7 +412,7 @@ def main():
                                            / ref.norm(dim=-1).clamp_min(1e-12)).max())
             def key(i: int, layer: int) -> tuple:
                 return (behavior.name, arm_name, okey, mkey, args.constraint, cell_budget,
-                        arm, i, layer)
+                        arm, i, layer) + tail
 
             def emit(i: int, layer: int, steps: list[dict], known, elapsed: float,
                      scan_layers: int = 1) -> None:
@@ -399,6 +433,10 @@ def main():
                     # chat-templated jailbreak prompts
                     "behavior": behavior.name, "test_arm": arm_name, "n_prompts": args.n_prompts,
                     "constraint": args.constraint, "inj_layer": inj_layer,
+                    "deltas_sha256": deltas_sha if arm != CLEAN_ARM else None,
+                    "item_index": items[i].index,
+                    "question_sha256": hashlib.sha256(items[i].question.encode()).hexdigest(),
+                    "prompt_sha256": hashlib.sha256(prompts[i].encode()).hexdigest(),
                     "layer": layer, "n_target": len(gold), "n_recovered": len(steps),
                     "exact": [s["token"] for s in steps] == gold[:len(steps)],
                     "inj_rel_residual": (at_inj["residual"] / at_inj["h_norm"]
@@ -512,41 +550,80 @@ def score(args, sipit_dir: Path, out_dir: Path, rows_path: Path, calibration: st
     rows = [json.loads(l) for l in rows_path.read_text().splitlines()]
     cells = {}
     for r in rows:
+        attack = r["arm"] != CLEAN_ARM
         cells.setdefault((r.get("behavior", "sentiment"), r.get("test_arm", ""),
                           r["objective"],
                           positions_key(r["arm"], r.get("n_positions", 1)),
-                          r["constraint"], r["budget"], r["arm"]), []).append(r)
+                          r["constraint"], r["budget"], r["arm"],
+                          r.get("inj_layer") if attack else None,
+                          r.get("deltas_sha256") if attack else None,
+                          r.get("n_prompts")), []).append(r)
+    try:
+        cells, notes = detect.merge_legacy_cells(
+            cells, family=lambda key: key[:8], legacy=lambda key: key[9] is None)
+    except ValueError as e:
+        raise SystemExit(f"{rows_path}: {e}") from e
+    for note in notes:
+        logger.warning("provenance: %s", note)
 
-    def profiles_of(cell_rows):
-        prof = {}
-        for r in cell_rows:
-            score = detect.row_score(r, k, cal)
-            if score == score:   # not NaN
-                prof.setdefault(r["prompt_index"], {})[r["layer"]] = score
-        return prof
+    def profiles_of(key, cell_rows):
+        try:
+            return detect.profiles_from_rows(cell_rows, k, cal, id_key="prompt_index")
+        except ValueError as e:
+            raise SystemExit(f"cell {key}: {e}") from e
 
     # the clean control must come from the SAME prompt set: a control fitted on 7-token
     # sentiment fragments is not the control for 40-token chat-templated jailbreaks
-    controls = {ck[:2]: profiles_of(v) for ck, v in cells.items() if ck[-1] == CLEAN_ARM}
+    controls = {(ck[0], ck[1], ck[-1]): (*profiles_of(ck, v), v)
+                for ck, v in cells.items() if ck[6] == CLEAN_ARM}
+
+    def control_for(key, cell_rows, want):
+        beh, beh_arm, n_run = key[0], key[1], key[-1]
+        if (beh, beh_arm, n_run) in controls:
+            ck, trip = (beh, beh_arm, n_run), controls[(beh, beh_arm, n_run)]
+        else:
+            loose = [(ck, trip) for ck, trip in controls.items()
+                     if ck[:2] == (beh, beh_arm) and want <= set(trip[0])]
+            if not loose:
+                return {}, {}, set()
+            ck, trip = loose[0]
+            logger.warning("%s/%s at n_prompts=%s: no clean control recorded the same "
+                           "prompt count; the one covering its prompt indices "
+                           "(n_prompts=%s) is used only where the question or token "
+                           "sequence matches", beh, beh_arm, n_run, ck[2])
+        mismatched, unknown = detect.verify_control(cell_rows, trip[2])
+        if mismatched:
+            raise SystemExit(f"cell {key}: clean control {ck} holds a different question "
+                             f"under prompt index {mismatched[:5]}; refusing to borrow "
+                             "its layers")
+        if unknown:
+            logger.warning("cell %s: %d prompt(s) cannot be matched to the clean control; "
+                           "their layers below the injection stay absent", key, len(unknown))
+        return trip[0], trip[1], set(unknown)
 
     summary = []
-    for key, cell_rows in sorted(cells.items()):
-        beh, beh_arm, obj, m, scope, budget, arm = key
-        control = controls.get((beh, beh_arm), {})
+    for key, cell_rows in sorted(cells.items(), key=lambda kv: tuple(map(str, kv[0]))):
+        beh, beh_arm, obj, m, scope, budget, arm, _, delta_sha, n_run = key
         L = cell_rows[0]["inj_layer"]
-        prof = profiles_of(cell_rows)
+        prof, cov = profiles_of(key, cell_rows)
+        control, control_cov, unmatched = ({}, {}, set()) if arm == CLEAN_ARM else control_for(
+            key, cell_rows, set(prof))
         if arm != CLEAN_ARM:
             for pid in prof:
+                if pid in unmatched:
+                    continue
                 for layer in layers:
                     if layer < L and layer in control.get(pid, {}):
                         prof[pid].setdefault(layer, control[pid][layer])
+                        cov[pid].setdefault(layer, control_cov[pid][layer])
         entry = {"behavior": beh, "test_arm": beh_arm, "objective": obj,
                  "budget": budget, "arm": arm, "inj_layer": L,
-                 "constraint": scope, "n_positions": m,
+                 "constraint": scope, "n_positions": m, "n_prompts": n_run,
+                 "deltas_sha256": delta_sha,
                  "n_injected_mean": (sum(r.get("n_injected", 1) for r in cell_rows)
                                      / max(1, len(cell_rows)))}
         entry.update(steered_sipit.summarize_cell(prof, L, stats, layers, cal,
-                                                  operating_points))
+                                                  operating_points, cov))
         at_inj = [r for r in cell_rows if r["layer"] == L]
         realized = [r["inj_rel_residual"] for r in at_inj
                     if r["inj_rel_residual"] is not None]
@@ -555,9 +632,12 @@ def score(args, sipit_dir: Path, out_dir: Path, rows_path: Path, calibration: st
         entry["inj_matched_frac"] = (sum(r["inj_matched"] for r in at_inj)
                                      / max(1, len(at_inj)))
         entry["exact_frac"] = sum(r["exact"] for r in cell_rows) / max(1, len(cell_rows))
-        entry["flip_fp16"] = sum(r["flip_fp16"] for r in at_inj) / max(1, len(at_inj))
+        # next-token argmax changes are kept as a diagnostic of the perturbation, not
+        # reported as behaviour (retired 7 Sep 2026: a function-word swap on a
+        # near-tied prompt is not an effect)
+        entry["argmax_changed_fp16"] = sum(r["flip_fp16"] for r in at_inj) / max(1, len(at_inj))
         f32 = [r["flip_fp32"] for r in at_inj if r["flip_fp32"] is not None]
-        entry["flip_fp32"] = sum(bool(v) for v in f32) / len(f32) if f32 else None
+        entry["argmax_changed_fp32"] = sum(bool(v) for v in f32) / len(f32) if f32 else None
         shifts = [prof[p][L] - control[p][L] for p in prof
                   if p in control and L in prof[p] and L in control[p]]
         entry["score_shift_at_inj_median"] = (
@@ -573,23 +653,21 @@ def score(args, sipit_dir: Path, out_dir: Path, rows_path: Path, calibration: st
     logger.info("scored against %s (k=%d, %s), bank FPR %.0f%% at the shipped point",
                 calibration, k, cal.get("statistic", "topk"),
                 100 * operating_points["shipped"]["fpr_clean"])
-    logger.info("%-13s %-9s %-9s %7s %-7s %3s %3s | %7s %10s %10s | %8s %7s | "
-                "%9s %8s %6s %6s",
+    logger.info("%-13s %-9s %-9s %7s %-7s %3s %3s | %7s %6s %10s %10s | %8s %7s | "
+                "%9s %8s",
                 "behavior", "objective", "scope", "budget", "arm", "m", "n", "TPR",
-                "sigma5run3", "sigma4run6", "inj hit", "med s/t", "realized", "shift",
-                "flip16", "flip32")
+                "unscor", "sigma5run3", "sigma4run6", "inj hit", "med s/t", "realized",
+                "shift")
     for e in summary:
         tag = "   <- FPR, this distribution" if e["arm"] == CLEAN_ARM else ""
-        logger.info("%-13s %-9s %-9s %7g %-7s %3d %3d | %6.0f%% %9.0f%% %9.0f%% | "
-                    "%7.0f%% %7.2f | %9.2e %8.1e %5.0f%% %6s%s",
+        logger.info("%-13s %-9s %-9s %7g %-7s %3d %3d | %6.0f%% %6d %9.0f%% %9.0f%% | "
+                    "%7.0f%% %7.2f | %9.2e %8.1e%s",
                     e["behavior"], e["objective"], e["constraint"], e["budget"],
                     e["arm"], e["n_positions"], e["n"],
-                    100 * e["tpr_shipped"], 100 * e["tpr_sigma5_run3"],
+                    100 * e["tpr_shipped"], e["unscorable"], 100 * e["tpr_sigma5_run3"],
                     100 * e["tpr_sigma4_run6"], 100 * e["inj_layer_hit_rate"],
                     e["inj_score_over_threshold_median"],
-                    e["realized_rel_residual_median"], e["score_shift_at_inj_median"],
-                    100 * e["flip_fp16"],
-                    "-" if e["flip_fp32"] is None else f"{100 * e['flip_fp32']:.0f}%", tag)
+                    e["realized_rel_residual_median"], e["score_shift_at_inj_median"], tag)
 
     out = {
         "model": args.model_name, "dtype": args.dtype,
@@ -598,6 +676,11 @@ def score(args, sipit_dir: Path, out_dir: Path, rows_path: Path, calibration: st
                                                "stride", "dense_tail", "fpr_prompt",
                                                "n_prompts")},
         "operating_points": operating_points,
+        "verdicts": "flagged / clear / unscorable per prompt; 'unscorable' counts prompts "
+                    "the calibration could not fully cover and are never read as clean",
+        "provenance": provenance.stamp(pgd_rows=rows_path,
+                                       calibration=sipit_dir / calibration),
+        "provenance_notes": notes,
         "cells": summary,
     }
     path = out_dir / f"tpr_summary{steered_sipit.summary_suffix(calibration)}.json"
