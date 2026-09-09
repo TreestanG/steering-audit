@@ -47,7 +47,7 @@ class LayerStat:
 
 
 def layer_stat(scores: list[float]) -> LayerStat | None:
-    clean = [s for s in scores if not math.isnan(s)]
+    clean = [s for s in scores if math.isfinite(s)]
     if len(clean) < 2:
         return None
     return LayerStat(len(clean), statistics.fmean(clean), statistics.stdev(clean))
@@ -200,25 +200,88 @@ def fit_role_stats(rows: list[dict], chat_ids, sd_floor: float, transform: str =
     return out
 
 
-def role_z_score(row: dict, cal: dict, k: int) -> float:
+def prefix_tokens(tokens: list[int], roles: list[str]) -> tuple[int, ...]:
+    return tuple(t for t, r in zip(tokens, roles) if r.startswith("pre"))
+
+
+def prefix_fingerprints(rows: list[dict], chat_ids, content_scheme: str = "pooled",
+                        end_cap: int = 6, header_len: int = 3) -> list[list[int]]:
+    """Every distinct template prefix (the tokens ahead of the user content) in the fit
+    set. pre{i} statistics describe exactly these tokens; a row with a different prefix
+    (another system prompt, an earlier turn) cannot be scored against them."""
+    seen = set()
+    for row in rows:
+        tokens = [s["token"] for s in row.get("steps", []) if s.get("h_norm")]
+        roles = position_roles(tokens, chat_ids, content_scheme, end_cap, header_len)
+        seen.add(prefix_tokens(tokens, roles))
+    return [list(p) for p in sorted(seen)]
+
+
+def _truncation(row: dict, n_steps: int) -> int:
+    n_target = row.get("n_target")
+    return max(0, n_target - n_steps) if isinstance(n_target, int) else 0
+
+
+def role_z_detail(row: dict, cal: dict, k: int) -> dict:
+    """The role-z score with its coverage: which positions had fitted statistics.
+
+    A position without a fitted (layer, role) cell, a prefix the calibration never saw,
+    or a position the inversion never reached contributes nothing to the score, so a
+    low score over partial coverage is not evidence of a clean trajectory. `complete`
+    is False in every such case and prompt_fpr reads it.
+    """
     transform = cal.get("transform", "none")
-    res, roles = _role_inputs(row, tuple(cal["chat_ids"]) if cal.get("chat_ids") else None,
-                              cal.get("content_scheme", "pooled"), cal.get("end_cap", 6),
-                              cal.get("chat_header_len", 3))
+    chat_ids = tuple(cal["chat_ids"]) if cal.get("chat_ids") else None
+    steps = [s for s in row.get("steps", []) if s.get("h_norm")]
+    tokens = [s["token"] for s in steps]
+    roles = position_roles(tokens, chat_ids, cal.get("content_scheme", "pooled"),
+                           cal.get("end_cap", 6), cal.get("chat_header_len", 3))
+    known = cal.get("prefix_fingerprints")
+    prefix_ok = None if known is None else list(prefix_tokens(tokens, roles)) in known
     st = cal["role_stats"].get(str(row["layer"]), {})
-    z = []
-    for x, r in zip(res, roles):
-        v = _transform(x, transform)
-        if r in st and v is not None:
-            z.append((v - st[r]["mean"]) / st[r]["sd"])
-    return topk_mean(z, k) if z else float("nan")
+    z, missing, zeros = [], [], 0
+    for s, r in zip(steps, roles):
+        v = _transform(s["residual"] / s["h_norm"], transform)
+        if v is None:
+            # an exact inversion: the least anomalous a position can be, covered
+            # whether or not the role was ever fitted (position 0 never is, for
+            # this reason)
+            zeros += 1
+            continue
+        if r not in st or (prefix_ok is False and r.startswith("pre")):
+            missing.append(r)
+            continue
+        z.append((v - st[r]["mean"]) / st[r]["sd"])
+    truncated = _truncation(row, len(steps))
+    if z:
+        score = topk_mean(z, k)
+    elif steps and not missing:
+        score = -math.inf
+    else:
+        score = float("nan")
+    return {"score": score, "n_positions": len(steps) + truncated,
+            "n_scored": len(steps) - len(missing), "n_zero": zeros,
+            "missing_roles": missing, "n_truncated": truncated, "prefix_match": prefix_ok,
+            "complete": bool(steps) and not missing and not truncated}
+
+
+def role_z_score(row: dict, cal: dict, k: int) -> float:
+    return role_z_detail(row, cal, k)["score"]
+
+
+def row_detail(row: dict, k: int, cal: dict | None = None) -> dict:
+    if cal and cal.get("statistic") == "role_z":
+        return role_z_detail(row, cal, k)
+    residuals = relative_residuals(row.get("steps", []))
+    truncated = _truncation(row, len(residuals))
+    return {"score": topk_mean(residuals, k) if residuals else float("nan"),
+            "n_positions": len(residuals) + truncated, "n_scored": len(residuals),
+            "n_zero": 0, "missing_roles": [], "n_truncated": truncated,
+            "prefix_match": None, "complete": bool(residuals) and not truncated}
 
 
 def row_score(row: dict, k: int, cal: dict | None = None) -> float:
-    if cal and cal.get("statistic") == "role_z":
-        return role_z_score(row, cal, k)
-    residuals = relative_residuals(row.get("steps", []))
-    return topk_mean(residuals, k) if residuals else float("nan")
+    return row_detail(row, k, cal)["score"]
 
 
 def score_rows(rows: list[dict], k: int, cal: dict | None = None) -> list[dict]:
@@ -227,16 +290,122 @@ def score_rows(rows: list[dict], k: int, cal: dict | None = None) -> list[dict]:
         residuals = relative_residuals(row.get("steps", []))
         if not residuals:
             continue
+        d = row_detail(row, k, cal)
         out.append({
             "id": row.get("id"),
             "category": row.get("category"),
             "layer": row["layer"],
             "n_steps": len(residuals),
-            "score": row_score(row, k, cal),
+            "score": d["score"],
+            "complete": d["complete"],
+            "missing_roles": d["missing_roles"],
+            "n_truncated": d["n_truncated"],
             "residuals": residuals,
             "fires_any": any_position_fires(row["steps"]),
         })
     return out
+
+
+def coverage_summary(scored: list[dict]) -> dict:
+    incomplete = [s for s in scored if not s["complete"]]
+    roles = sorted({r for s in incomplete for r in s["missing_roles"]})
+    return {"n_rows": len(scored), "n_incomplete": len(incomplete),
+            "n_truncated_rows": sum(1 for s in incomplete if s["n_truncated"]),
+            "missing_roles": roles}
+
+
+def profiles_from_rows(rows: list[dict], k: int, cal: dict | None = None,
+                       id_key: str = "id") -> tuple[dict, dict]:
+    """id -> {layer: score} and id -> {layer: complete}. A NaN score stays in the
+    profile so the rule sees the gap. A repeated (id, layer) is an error: the caller's
+    cell key does not separate two runs that both wrote this row."""
+    profiles: dict = {}
+    coverage: dict = {}
+    for r in rows:
+        pid, layer = r[id_key], r["layer"]
+        if layer in profiles.get(pid, {}):
+            raise ValueError(f"two rows for {id_key}={pid!r} at layer {layer}; the cell "
+                             "key does not separate the runs that wrote them")
+        d = row_detail(r, k, cal)
+        profiles.setdefault(pid, {})[layer] = d["score"]
+        coverage.setdefault(pid, {})[layer] = d["complete"]
+    return profiles, coverage
+
+
+def prompt_identity(rows: list[dict], id_key: str = "prompt_index") -> dict:
+    """id -> what identifies the prompt behind it: the question hash when the row has
+    one, and the gold token sequence (longest row for that id) which every inverted
+    row carries. An enumeration position is not an identity: position 3 of a
+    15-prompt stratified list is a different question from position 3 of 50."""
+    out: dict = {}
+    for r in rows:
+        ident = out.setdefault(r[id_key], {"sha": None, "tokens": None})
+        if r.get("question_sha256"):
+            ident["sha"] = r["question_sha256"]
+        toks = tuple(s.get("gold_token") for s in r.get("steps") or [])
+        if toks and all(t is not None for t in toks):
+            if ident["tokens"] is None or len(toks) > len(ident["tokens"][1]):
+                ident["tokens"] = (r.get("n_target"), toks)
+    return out
+
+
+def same_prompt(a: dict | None, b: dict | None) -> bool | None:
+    """True/False when the two identities can be compared, None when they cannot."""
+    if not a or not b:
+        return None
+    if a["sha"] and b["sha"]:
+        return a["sha"] == b["sha"]
+    if a["tokens"] and b["tokens"]:
+        (na, ta), (nb, tb) = a["tokens"], b["tokens"]
+        if na is not None and nb is not None and na != nb:
+            return False
+        n = min(len(ta), len(tb))
+        return n > 0 and ta[:n] == tb[:n]
+    return None
+
+
+def verify_control(attack_rows: list[dict], control_rows: list[dict],
+                   id_key: str = "prompt_index") -> tuple[list, list]:
+    """(mismatched ids, unverifiable ids) between an attack cell and the clean rows it
+    would borrow sub-injection layers from. A mismatch is a different question under
+    the same number and must be rejected; an unverifiable id has nothing to compare
+    and must not be filled by assumption."""
+    want, have = prompt_identity(attack_rows, id_key), prompt_identity(control_rows, id_key)
+    mismatched, unknown = [], []
+    for pid in sorted(want):
+        verdict = same_prompt(want[pid], have.get(pid))
+        if verdict is False:
+            mismatched.append(pid)
+        elif verdict is None:
+            unknown.append(pid)
+    return mismatched, unknown
+
+
+def merge_legacy_cells(cells: dict, family, legacy, id_key: str = "prompt_index") -> tuple[dict, list[str]]:
+    """Fold rows whose cell key lacks provenance (written before the field existed)
+    into the one recorded cell of the same family, provided no (prompt, layer) is in
+    both. A shared (prompt, layer) is exactly the collision the key exists to catch and
+    stays an error; a family with several recorded cells is left apart."""
+    by_family: dict = {}
+    for key in cells:
+        by_family.setdefault(family(key), []).append(key)
+    merged, notes = dict(cells), []
+    for keys in by_family.values():
+        old = [k for k in keys if legacy(k)]
+        new = [k for k in keys if not legacy(k)]
+        if not old or len(new) != 1:
+            continue
+        target = new[0]
+        have = {(r[id_key], r["layer"]) for r in merged[target]}
+        for k in old:
+            clash = [(r[id_key], r["layer"]) for r in merged[k] if (r[id_key], r["layer"]) in have]
+            if clash:
+                raise ValueError(f"{len(clash)} (prompt, layer) pairs exist both in a recorded "
+                                 f"cell and in rows without provenance, e.g. {clash[0]}")
+            merged[target] = merged[target] + merged.pop(k)
+            have |= {(r[id_key], r["layer"]) for r in merged[target]}
+            notes.append(f"{len(cells[k])} rows without provenance folded into {target}")
+    return merged, notes
 
 
 # ------------------------------------------------------------------ layer axis
@@ -250,6 +419,13 @@ def build_profiles(scored: list[dict]) -> tuple[dict, dict, list[int]]:
         categories[s["id"]] = s["category"] or "?"
     layers = sorted({s["layer"] for s in scored})
     return profiles, categories, layers
+
+
+def build_coverage(scored: list[dict]) -> dict:
+    coverage: dict[str, dict[int, bool]] = {}
+    for s in scored:
+        coverage.setdefault(s["id"], {})[s["layer"]] = s["complete"]
+    return coverage
 
 
 def layer_stats(scored: list[dict], calibrate_on: str) -> dict[int, LayerStat]:
@@ -272,19 +448,26 @@ def longest_run(layers: list[int], fired: set[int]) -> int:
     return best
 
 
+def _gap(stats: dict[int, LayerStat], profile: dict[int, float], layer: int) -> bool:
+    score = profile.get(layer)
+    return stats.get(layer) is None or score is None or math.isnan(score)
+
+
 def scan(profile: dict[int, float], stats: dict[int, LayerStat], layers: list[int],
-         sigma: float, stride: int, dense_tail: int = 0) -> tuple[set[int], set[int]]:
+         sigma: float, stride: int, dense_tail: int = 0) -> tuple[set[int], set[int], set[int]]:
+    """(fired, examined, gaps): gaps are examined layers with no calibration or no
+    score, which the rule cannot read and must not report as clean."""
     examined: set[int] = set()
     fired: set[int] = set()
+    gaps: set[int] = set()
     index = {layer: i for i, layer in enumerate(layers)}
 
     def fires(layer: int) -> bool:
         examined.add(layer)
-        stat = stats.get(layer)
-        score = profile.get(layer)
-        if stat is None or score is None or math.isnan(score):
+        if _gap(stats, profile, layer):
+            gaps.add(layer)
             return False
-        return score > stat.threshold(sigma)
+        return profile[layer] > stats[layer].threshold(sigma)
 
     cut = max(0, len(layers) - max(0, dense_tail))
     probe = list(layers[:cut:max(1, stride)]) + list(layers[cut:])
@@ -297,37 +480,53 @@ def scan(profile: dict[int, float], stats: dict[int, LayerStat], layers: list[in
                 if fires(layers[j]):
                     fired.add(layers[j])
                     frontier.append(layers[j])
-    return fired, examined
+    return fired, examined, gaps
 
 
 def prompt_fpr(profiles: dict, stats: dict[int, LayerStat], layers: list[int], *,
                sigma: float, min_run: int, stride: int,
-               sigma_any: float = float("inf"), dense_tail: int = 0) -> dict:
-    """Per-PROMPT flag rate: the quantity worth tuning, since a prompt is the unit."""
-    flagged, examined_total, runs = 0, 0, []
+               sigma_any: float = float("inf"), dense_tail: int = 0,
+               coverage: dict | None = None) -> dict:
+    """Per-PROMPT flag rate: the quantity worth tuning, since a prompt is the unit.
+
+    Three verdicts per prompt, not two. A flag stands on whatever was scored. A clear
+    verdict needs every examined layer to have a calibrated, fully covered score;
+    otherwise the prompt is UNSCORABLE, which is neither. `coverage` is
+    id -> {layer: complete} from profiles_from_rows or build_coverage; without it only
+    missing calibrations and NaN scores count as gaps.
+    """
+    flagged, unscorable_n, examined_total, runs = 0, 0, 0, []
     per_id = {}
     for pid, profile in profiles.items():
-        fired, visited = scan(profile, stats, layers, sigma, stride, dense_tail)
+        fired, visited, gaps = scan(profile, stats, layers, sigma, stride, dense_tail)
         run = longest_run(layers, fired)
         lone = False
         if math.isfinite(sigma_any):
             for layer in layers:
                 visited.add(layer)
-                stat, score = stats.get(layer), profile.get(layer)
-                if (stat is not None and score is not None and not math.isnan(score)
-                        and score > stat.threshold(sigma_any)):
+                if _gap(stats, profile, layer):
+                    gaps.add(layer)
+                elif profile[layer] > stats[layer].threshold(sigma_any):
                     lone = True
                     break
+        partial = {layer for layer in visited
+                   if (coverage or {}).get(pid, {}).get(layer, True) is False}
         hit = (run >= min_run and run > 0) or lone
+        unscorable = not hit and bool(gaps or partial)
         flagged += hit
+        unscorable_n += unscorable
         examined_total += len(visited)
         runs.append(run)
         per_id[pid] = {"longest_run": run, "n_fired": len(fired), "lone_layer": lone,
-                       "examined": len(visited), "flagged": hit}
+                       "examined": len(visited), "flagged": hit,
+                       "unscorable": unscorable,
+                       "verdict": "flagged" if hit else ("unscorable" if unscorable else "clear"),
+                       "gaps": sorted(gaps | partial)}
     n = len(profiles) or 1
     return {
         "n_prompts": len(profiles),
         "fpr_prompt": flagged / n,
+        "n_unscorable": unscorable_n,
         "mean_longest_run": statistics.fmean(runs) if runs else float("nan"),
         "max_longest_run": max(runs) if runs else 0,
         "layers_examined_frac": examined_total / (n * len(layers)) if layers else float("nan"),
@@ -355,7 +554,7 @@ def run_distribution(profiles: dict, stats: dict[int, LayerStat], layers: list[i
                      sigma: float, stride: int, dense_tail: int = 0) -> dict[int, int]:
     counts: dict[int, int] = {}
     for profile in profiles.values():
-        fired, _ = scan(profile, stats, layers, sigma, stride, dense_tail)
+        fired, _, _ = scan(profile, stats, layers, sigma, stride, dense_tail)
         run = longest_run(layers, fired)
         counts[run] = counts.get(run, 0) + 1
     return dict(sorted(counts.items()))
@@ -520,7 +719,13 @@ def main():
                         "end_cap": args.end_cap, "chat_header_len": header_len,
                         "role_stats": fit_role_stats(traj, chat_ids, args.sd_floor,
                                                      args.transform, args.content_roles,
-                                                     args.end_cap, header_len)}
+                                                     args.end_cap, header_len),
+                        "prefix_fingerprints": prefix_fingerprints(
+                            traj, chat_ids, args.content_roles, args.end_cap, header_len)}
+            if len(role_cal["prefix_fingerprints"]) > 1:
+                logger.warning("%s: %d distinct template prefixes in the fit set; pre{i} "
+                               "statistics pool them", slug,
+                               len(role_cal["prefix_fingerprints"]))
             n_roles = sum(len(d) for d in role_cal["role_stats"].values())
             at_floor = sum(1 for d in role_cal["role_stats"].values() for v in d.values()
                            if v["sd"] <= args.sd_floor * (1 + 1e-9))
@@ -532,7 +737,13 @@ def main():
         scored = score_rows(traj, args.k, role_cal)
         if not scored:
             continue
+        cov = coverage_summary(scored)
+        if cov["n_incomplete"]:
+            logger.warning("%s: %d/%d fit rows are not fully covered (%d truncated; "
+                           "roles without statistics: %s)", slug, cov["n_incomplete"],
+                           cov["n_rows"], cov["n_truncated_rows"], cov["missing_roles"])
         profiles, categories, layers = build_profiles(scored)
+        coverage = build_coverage(scored)
         if layers != list(range(layers[0], layers[-1] + 1)):
             logger.warning("%s: layers %s are not contiguous, so --min_run counts "
                            "adjacency in this list rather than in depth", slug, layers)
@@ -542,6 +753,13 @@ def main():
             stats = {layer: LayerStat(st.n, 0.0, 1.0) for layer, st in stats.items()}
         if not stats:
             continue
+        uncalibrated = [layer for layer in layers if layer not in stats]
+        if uncalibrated:
+            # a layer where every clean row inverts exactly (layer 0 by construction)
+            # has no distribution to calibrate and is not scanned
+            logger.info("%s: layers %s have no clean distribution and are not scanned",
+                        slug, uncalibrated)
+            layers = [layer for layer in layers if layer in stats]
 
         sigma = args.sigma
         if args.target_fpr is not None:
@@ -551,7 +769,12 @@ def main():
                                dense_tail=args.dense_tail)
         report = prompt_fpr(profiles, stats, layers, sigma=sigma,
                             min_run=args.min_run, stride=args.stride,
-                            sigma_any=sigma * ratio, dense_tail=args.dense_tail)
+                            sigma_any=sigma * ratio, dense_tail=args.dense_tail,
+                            coverage=coverage)
+        if report["n_unscorable"]:
+            logger.warning("%s: %d/%d fit prompts are unscorable under their own "
+                           "calibration (not counted as clean)", slug,
+                           report["n_unscorable"], report["n_prompts"])
         per_layer_hits = sum(1 for pid, p in profiles.items() for layer in layers
                              if layer in stats and not math.isnan(p.get(layer, float("nan")))
                              and p[layer] > stats[layer].threshold(sigma))
@@ -576,7 +799,9 @@ def main():
                     "transform": args.transform, "content_scheme": args.content_roles,
                     "end_cap": args.end_cap, "chat_header_len": header_len,
                     "role_stats": role_cal["role_stats"],
+                    "prefix_fingerprints": role_cal["prefix_fingerprints"],
                     "fit_layers_dir": str(layers_dir)} if role_cal else {}),
+                "fit_coverage": cov, "n_unscorable": report["n_unscorable"],
                 "min_run": args.min_run,
                 "stride": args.stride, "dense_tail": args.dense_tail,
                 "calibrated_on": args.calibrate_on,

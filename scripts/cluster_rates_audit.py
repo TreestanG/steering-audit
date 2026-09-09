@@ -78,26 +78,37 @@ def cuda_verdicts(root: Path, questions: list[str]) -> dict:
     cal = json.loads((root / "sipit/detector_calibration_rolezlog_k1_fpr5_n75.json").read_text())
     stats = {int(k): detect.LayerStat(v["n"], v["mean"], v["sd"]) for k, v in cal["per_layer"].items()}
     layers = sorted(stats)
-    cells, inj = {}, {}
+    cells, inj, rows_of = {}, {}, {}
     for line in (root / "pgd_sipit/pgd_rows.jsonl").read_text().splitlines():
         row = json.loads(line)
         if row.get("behavior") != "jbb_refusal":
             continue
         key = row["arm"], float(row["budget"])
-        cells.setdefault(key, {}).setdefault(row["prompt_index"], {})[row["layer"]] = (
-            detect.row_score(row, cal["k"], cal))
+        profile = cells.setdefault(key, {}).setdefault(row["prompt_index"], {})
+        if row["layer"] in profile:
+            raise SystemExit(f"{root.name}: two rows for cell {key}, prompt "
+                             f"{row['prompt_index']}, layer {row['layer']}")
+        profile[row["layer"]] = detect.row_score(row, cal["k"], cal)
+        rows_of.setdefault(key, []).append(row)
         inj[key] = row["inj_layer"]
     control = cells[("clean", 0.0)]
     verdicts = {}
     for key, profiles in cells.items():
         if key[0] == "clean":
             continue
+        mismatched, unknown = detect.verify_control(rows_of[key], rows_of[("clean", 0.0)])
+        if mismatched or unknown:
+            raise SystemExit(f"{root.name} cell {key}: clean control mismatched for "
+                             f"{mismatched}, unverifiable for {unknown}")
         full = {}
         for pid, prof in profiles.items():
             full[pid] = {l: v for l, v in control[pid].items() if l < inj[key]}
             full[pid].update(prof)
         rep = detect.prompt_fpr(full, stats, layers, **{k: cal[k] for k in
                                 ("sigma", "min_run", "stride", "sigma_any", "dense_tail")})
+        if rep["n_unscorable"]:
+            print(f"WARNING {root.name} cell {key}: {rep['n_unscorable']} unscorable prompt(s) "
+                  "counted as not detected", file=sys.stderr)
         for pid, v in rep["per_id"].items():
             verdicts[(key[0], key[1], questions[pid])] = int(v["flagged"])
     return verdicts

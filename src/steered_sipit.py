@@ -328,7 +328,7 @@ def build_operating_points(cal: dict, reference: dict, stats: dict, layers: list
 
 
 def summarize_cell(profiles: dict, inj_layer: int, stats: dict, layers: list[int],
-                   cal: dict, operating_points: dict) -> dict:
+                   cal: dict, operating_points: dict, coverage: dict | None = None) -> dict:
     """One (arm, layer, strength) cell scored by detect.py's own rule, unchanged."""
     entry: dict = {"n": len(profiles)}
     inj_scores, inj_hits = [], 0
@@ -341,10 +341,12 @@ def summarize_cell(profiles: dict, inj_layer: int, stats: dict, layers: list[int
     for name, op in operating_points.items():
         rep = detect.prompt_fpr(profiles, stats, layers, sigma=op["sigma"],
                                 min_run=op["min_run"], stride=cal["stride"],
-                                sigma_any=op["sigma_any"], dense_tail=cal["dense_tail"])
+                                sigma_any=op["sigma_any"], dense_tail=cal["dense_tail"],
+                                coverage=coverage)
         entry[f"tpr_{name}"] = rep["fpr_prompt"]
         if name == "shipped":
             entry["flagged"] = sum(v["flagged"] for v in rep["per_id"].values())
+            entry["unscorable"] = rep["n_unscorable"]
             entry["lone_only"] = sum(v["flagged"] and v["longest_run"] < op["min_run"]
                                      for v in rep["per_id"].values())
             entry["mean_longest_run"] = rep["mean_longest_run"]
@@ -370,37 +372,25 @@ def score(args, sipit_dir: Path, rows_path: Path,
 
     summary = []
     for (arm, L, f), cell_rows in sorted(cells.items()):
-        profiles = {}
-        for r in cell_rows:
-            score = detect.row_score(r, k, cal)
-            if score != score:
-                continue
-            profiles.setdefault(r["id"], {})[r["layer"]] = score
+        profiles, coverage = detect.profiles_from_rows(cell_rows, k, cal, id_key="id")
         for pid in profiles:
             for layer in layers:
                 if layer < L and layer in clean_score.get(pid, {}):
                     profiles[pid].setdefault(layer, clean_score[pid][layer])
+                    coverage[pid].setdefault(layer, True)
         entry = {"arm": arm, "inj_layer": L, "fraction": f}
-        entry.update(summarize_cell(profiles, L, stats, layers, cal, operating_points))
+        entry.update(summarize_cell(profiles, L, stats, layers, cal, operating_points,
+                                    coverage))
         summary.append(entry)
 
-    gaps_path = sipit_dir.parent / "sentiment" / "gaps.json"
-    flips = {}
-    if gaps_path.exists():
-        gaps = json.loads(gaps_path.read_text())
-        for g in gaps.get("layers", []):
-            flips[(g["layer"], g["fraction"])] = g.get("flip_rate")
-
-    logger.info("%-7s %3s %6s %4s | %8s %11s %11s | %9s %8s %10s", "arm", "L", "frac",
-                "n", "TPR", "sigma5run3", "sigma4run6", "inj hit", "med s/t", "flip@frac")
+    logger.info("%-7s %3s %6s %4s | %8s %6s %11s %11s | %9s %8s", "arm", "L", "frac",
+                "n", "TPR", "unscor", "sigma5run3", "sigma4run6", "inj hit", "med s/t")
     for e in summary:
-        flip = flips.get((e["inj_layer"], e["fraction"]))
-        logger.info("%-7s %3d %6g %4d | %7.0f%% %10.0f%% %10.0f%% | %8.0f%% %8.2f %10s",
+        logger.info("%-7s %3d %6g %4d | %7.0f%% %6d %10.0f%% %10.0f%% | %8.0f%% %8.2f",
                     e["arm"], e["inj_layer"], e["fraction"], e["n"],
-                    100 * e["tpr_shipped"], 100 * e["tpr_sigma5_run3"],
+                    100 * e["tpr_shipped"], e["unscorable"], 100 * e["tpr_sigma5_run3"],
                     100 * e["tpr_sigma4_run6"], 100 * e["inj_layer_hit_rate"],
-                    e["inj_score_over_threshold_median"],
-                    "-" if flip is None else f"{100 * flip:.0f}%")
+                    e["inj_score_over_threshold_median"])
 
     out = {
         "model": args.model_name, "dtype": args.dtype,
