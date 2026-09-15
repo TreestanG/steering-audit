@@ -166,7 +166,7 @@ def main():
         logger.warning(
             "%s calls %.1f%% of non-jailbroken completions jailbroken (agreement "
             "%.1f%%, against %.1f%% for the best published judge). Every ASR built on "
-            "it is an UPPER BOUND and has to be labelled as one.",
+            "it is a noisy proxy that overestimates on this set and has to be labelled as one.",
             judge.name, 100 * mine["fpr"], 100 * mine["agreement"],
             100 * (references[-1] if references else 0.0))
 

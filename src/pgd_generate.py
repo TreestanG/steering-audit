@@ -86,7 +86,7 @@ def main():
     out.write_text(json.dumps({
         "model": a.model_name, "dtype": a.dtype, "layer": layer, "budget": budget,
         "behavior": beh.name, "arm": arm_name, "n_prompts": len(prompts),
-        "max_new_tokens": a.max_new_tokens, "scorer": "substring_matching (upper bound)",
+        "max_new_tokens": a.max_new_tokens, "scorer": "substring_matching (noisy proxy)",
         "substring_asr": summary, "rows": rows}, indent=2) + "\n")
     logger.info("wrote %s", out)
 
