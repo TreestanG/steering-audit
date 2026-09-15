@@ -1,0 +1,238 @@
+{
+  "generated": "2026-09-14",
+  "code": {
+    "git_head": "da6c9d64b869122fd1246c91354bad9aaa07bf60",
+    "git_dirty": true,
+    "source_sha256": "cfa9a148ff90e505c937bf3131c21468210d11e880dbbb4953edf20b51b38811"
+  },
+  "files": {
+    "baselines_Llama-3.2-1B": {
+      "path": "results/current/baselines/meta-llama_Llama-3.2-1B-Instruct_fp16.json",
+      "sha256": "d867bfbae8af6176efa3306ee20b35d34230f413080803ba7149cd927a21bed7"
+    },
+    "baselines_Qwen-0.5B (n=50)": {
+      "path": "results/current/baselines/Qwen_Qwen2.5-0.5B-Instruct_n50.json",
+      "sha256": "a97a0c8670e0d664a024fe0074eb07d773de322f56138d790031c27d0eb6dd1f"
+    },
+    "baselines_Qwen-1.5B": {
+      "path": "results/current/baselines/Qwen_Qwen2.5-1.5B-Instruct_fp16.json",
+      "sha256": "aeb066632acda0e160236f82f179a5f2e85a018ebbdc199be988db92aa4046c2"
+    },
+    "baselines_Qwen-7B": {
+      "path": "results/current/baselines/Qwen_Qwen2.5-7B-Instruct_fp16.json",
+      "sha256": "d57450dadb79ba9c0a19ef4ef29a7e10619761918ad7ab51b90b6cadc1a707fe"
+    },
+    "baselines_gemma-3-1b": {
+      "path": "results/current/baselines/google_gemma-3-1b-it_fp16.json",
+      "sha256": "163ee903e85800e19f19f5708c17e8c8172960572fd6bcb181e7f4e7cf4075b6"
+    },
+    "cluster_rates": {
+      "path": "results/current/cluster-rates-2026-09-07.json",
+      "sha256": "3a46a6a04dbc1f13497d24877df165698800646f2e00a9611ca507b4da675e13"
+    },
+    "deployment_stop_rescore": {
+      "path": "results/current/deployment-stop-2026-09-08.json",
+      "sha256": "cd8f1efbb427e84d3d80d0258facad8357d76c4a5f4d23c6015bc04c7bb5a484"
+    },
+    "holdout_Llama-3.2-1B_chat 75_2way": {
+      "path": "results_cuda/meta-llama_Llama-3.2-1B-Instruct_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_n75_2way.json",
+      "sha256": "73c687981200f82a10c5fd855b19f3103bf2eb399c5b9562e454055d28a3e6a5"
+    },
+    "holdout_Llama-3.2-1B_chat 75_3way": {
+      "path": "results_cuda/meta-llama_Llama-3.2-1B-Instruct_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_n75_3way.json",
+      "sha256": "67306a0d6e3263233a937df6fd80451069350f849bb52c31da6cc00f1f877cda"
+    },
+    "holdout_Qwen-0.5B, sentiment_ext (50)": {
+      "path": "results/Qwen_Qwen2.5-0.5B-Instruct_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_n100_3way_sentiment_ext.json",
+      "sha256": "982dfaddb544da89f16bc532f188bc40f222e0d716018ab12fe62ea6e1084e40"
+    },
+    "holdout_Qwen-0.5B_bare_2way": {
+      "path": "results/Qwen_Qwen2.5-0.5B-Instruct_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_bare_2way.json",
+      "sha256": "8dbaa702468c76aed9af4f414353609337048eaf593b233ef3e5d81b6184c48b"
+    },
+    "holdout_Qwen-0.5B_bare_3way": {
+      "path": "results/Qwen_Qwen2.5-0.5B-Instruct_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_bare_3way.json",
+      "sha256": "a6d738026ea33eb54eab67f0397f385db19c0fe717f08c86c2716d8adf6f7a98"
+    },
+    "holdout_Qwen-0.5B_chat 100_2way": {
+      "path": "results/Qwen_Qwen2.5-0.5B-Instruct_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_n100_2way.json",
+      "sha256": "412bfd9f5205ca2682ba70d2a091ba54198d3c7de938c0e88c0fa53b02191bcf"
+    },
+    "holdout_Qwen-0.5B_chat 100_3way": {
+      "path": "results/Qwen_Qwen2.5-0.5B-Instruct_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_n100_3way.json",
+      "sha256": "c7516ac9b3ef7798568c8b0e175d90da31252d42980ff77aaaa395c9b57e1e25"
+    },
+    "holdout_Qwen-0.5B_chat 25_2way": {
+      "path": "results/Qwen_Qwen2.5-0.5B-Instruct_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_2way.json",
+      "sha256": "950845752944f05dd7de97cc626dbfa73c42a8f7ae9e9f87e1e7bdb96888ee60"
+    },
+    "holdout_Qwen-0.5B_chat 25_3way": {
+      "path": "results/Qwen_Qwen2.5-0.5B-Instruct_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_3way.json",
+      "sha256": "665be209fb8fa665c2d76093be62ddb28d11441ecb62c67cac16df26e994be0f"
+    },
+    "holdout_Qwen-0.5B_chat 50_2way": {
+      "path": "results/Qwen_Qwen2.5-0.5B-Instruct_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_n50_2way.json",
+      "sha256": "a5238ce4c655d56b56ebac4fb922ffc946d211f268f783123f9c05adbc23a43b"
+    },
+    "holdout_Qwen-0.5B_chat 50_3way": {
+      "path": "results/Qwen_Qwen2.5-0.5B-Instruct_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_n50_3way.json",
+      "sha256": "64c0ac5ee294071d3a5511dbc911500e24da67396d18517710a683d4a7193cd8"
+    },
+    "holdout_Qwen-0.5B_chat 75_2way": {
+      "path": "results/Qwen_Qwen2.5-0.5B-Instruct_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_n75_2way.json",
+      "sha256": "d904276d6b139998b93d6e51908fc1a10b585aa9ae1b3d0923615a9b323ae172"
+    },
+    "holdout_Qwen-0.5B_chat 75_3way": {
+      "path": "results/Qwen_Qwen2.5-0.5B-Instruct_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_n75_3way.json",
+      "sha256": "cbfdc01c660f7acb14140f98f500dc55edaea5f0d627f4aa42670be309f615e0"
+    },
+    "holdout_Qwen-1.5B_chat 75_2way": {
+      "path": "results_cuda/Qwen_Qwen2.5-1.5B-Instruct_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_n75_2way.json",
+      "sha256": "f4defc9d0d2a422f30c5fc1766dfbff9aba2d629db6d595f9cdb810bf1e22699"
+    },
+    "holdout_Qwen-1.5B_chat 75_3way": {
+      "path": "results_cuda/Qwen_Qwen2.5-1.5B-Instruct_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_n75_3way.json",
+      "sha256": "8d4e4868807aeca3990f2c9f9e0f8ebfe464d0f72268a6ca53173648fc83d434"
+    },
+    "holdout_Qwen-7B_bare_2way": {
+      "path": "results_cuda/Qwen_Qwen2.5-7B-Instruct_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_bare_2way.json",
+      "sha256": "eb09b13f653c676d83f560094b9a54b7cc9457b0c8919b12b556d7190917892f"
+    },
+    "holdout_Qwen-7B_bare_3way": {
+      "path": "results_cuda/Qwen_Qwen2.5-7B-Instruct_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_bare_3way.json",
+      "sha256": "08f25d4d4d671fe3f59738d61c9e0f58b5203a9d49b4cf0bc1752fac986ae9e6"
+    },
+    "holdout_Qwen-7B_chat 75_2way": {
+      "path": "results_cuda/Qwen_Qwen2.5-7B-Instruct_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_n75_2way.json",
+      "sha256": "87eccdf91ba611b69d9ddf4c9032f0a752d2cc813c94bda300ebb2c6a7e93cc4"
+    },
+    "holdout_Qwen-7B_chat 75_3way": {
+      "path": "results_cuda/Qwen_Qwen2.5-7B-Instruct_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_n75_3way.json",
+      "sha256": "10cc2f5692fb9f1132424e2fc5140e59e53f4e1c7c6342ea6ab2eb7d4e40f5b9"
+    },
+    "holdout_gemma-3-1b, sentiment (25)": {
+      "path": "results/google_gemma-3-1b-it_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_3way_sentiment.json",
+      "sha256": "ecd4397e93dd9b8c4ced148141d1c70df8db4ba3fe253969b896d7ed8538039b"
+    },
+    "holdout_gemma-3-1b, sentiment_ext (50)": {
+      "path": "results/google_gemma-3-1b-it_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_3way_sentiment_ext.json",
+      "sha256": "81fc3ace6c76a421383abb4bb1ce633513d1728207d9bed85eeca856597aa01b"
+    },
+    "holdout_gemma-3-1b_bare_2way": {
+      "path": "results/google_gemma-3-1b-it_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_2way.json",
+      "sha256": "6242d5be54be69b3a7fdc2f97bb2867f052292122af4ba1201a59db752b9ca2a"
+    },
+    "holdout_gemma-3-1b_bare_3way": {
+      "path": "results/google_gemma-3-1b-it_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_3way.json",
+      "sha256": "0818a9915a02f85118402557456a04c0d9c958c59e69813921c0d25a536c7c28"
+    },
+    "holdout_gemma-3-1b_chat 25_2way": {
+      "path": "results/google_gemma-3-1b-it_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_chat_2way.json",
+      "sha256": "6407231ac1cd22413c275551ee7fa93cb7301d4047515ab4cf0e76ebb368d352"
+    },
+    "holdout_gemma-3-1b_chat 25_3way": {
+      "path": "results/google_gemma-3-1b-it_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_chat_3way.json",
+      "sha256": "8b0e32cd2cefe4daa47e9ba925bda8c9f2a6aec86453feafa339611fdd8df74d"
+    },
+    "holdout_gemma-3-1b_chat 75_2way": {
+      "path": "results_cuda/google_gemma-3-1b-it_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_n75_2way.json",
+      "sha256": "190d6b7ab2a4b05fda552f3b54b5cfb9df0d1bad5f692f516887d6698fab3fa3"
+    },
+    "holdout_gemma-3-1b_chat 75_3way": {
+      "path": "results_cuda/google_gemma-3-1b-it_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_n75_3way.json",
+      "sha256": "f0e8cee92400cc787d4ee879781c2ab9fe578121a033bc39edc9ad3d063107d3"
+    },
+    "holdout_gpt2, sentiment (25)": {
+      "path": "results/gpt2_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_3way_sentiment.json",
+      "sha256": "a3d20c419b792f39855eb2d7b4883274980d9e80e5b603ef86d8b906987554c1"
+    },
+    "holdout_gpt2_bare_2way": {
+      "path": "results/gpt2_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_2way.json",
+      "sha256": "6785f1f8ffb659ce34752927d90ada456bce04cd837f5b47ae298031eb544aad"
+    },
+    "holdout_gpt2_bare_3way": {
+      "path": "results/gpt2_fp16/sipit/detector_holdout_rolezlog_k1_fpr5_3way.json",
+      "sha256": "868d2c094d02be3e7c086f3a0cce587b693f26410b645bf3611d86ee20f179d8"
+    },
+    "judge_repeats_jbb_refusal_harmful_b0.0085_gen_judge_repeats": {
+      "path": "results/Qwen_Qwen2.5-0.5B-Instruct_n50/pgd/ladder/jbb_refusal_harmful_b0.0085_gen_judge_repeats.json",
+      "sha256": "4f5e8419af5c7b16436086455848c9d405622b027ac8c7514f16e9864b37c611"
+    },
+    "judge_repeats_jbb_refusal_harmful_b0.02_gen_judge_repeats": {
+      "path": "results/Qwen_Qwen2.5-0.5B-Instruct_n50/pgd/ladder/jbb_refusal_harmful_b0.02_gen_judge_repeats.json",
+      "sha256": "ed8286722ea6e5f2556c641aa23530913e7f4e137ca9085ff80a3117784d9db4"
+    },
+    "judge_repeats_jbb_refusal_harmful_b0.05_gen_judge_repeats": {
+      "path": "results/Qwen_Qwen2.5-0.5B-Instruct_n50/pgd/ladder/jbb_refusal_harmful_b0.05_gen_judge_repeats.json",
+      "sha256": "92787eb60bd5d1e906c8eba05f388bc10fb2f4489dd5c1bf09b60b5681640059"
+    },
+    "judge_repeats_jbb_refusal_harmful_b0.12_gen_judge_repeats": {
+      "path": "results/Qwen_Qwen2.5-0.5B-Instruct_n50/pgd/ladder/jbb_refusal_harmful_b0.12_gen_judge_repeats.json",
+      "sha256": "f2f135a500e1c96fcee96e56130d5fcab43632a7810068cddab301e0f282b62a"
+    },
+    "judge_repeats_jbb_refusal_harmful_b0.30_gen_judge_repeats": {
+      "path": "results/Qwen_Qwen2.5-0.5B-Instruct_n50/pgd/ladder/jbb_refusal_harmful_b0.30_gen_judge_repeats.json",
+      "sha256": "50c8d239f83a9cf4f5a2ea909b2f109b060bbb4cd59ab6bdb0b333d12bd1e008"
+    },
+    "mahalanobis_qwen05b": {
+      "path": "results/current/mahalanobis-qwen05b-2026-09-08.json",
+      "sha256": "507c36b9e9180515076740105b23157f6ac5d544f2c84866181b8e03519bfcb0"
+    },
+    "n50_transitions": {
+      "path": "results/current/n50-transitions-2026-09-08.json",
+      "sha256": "7b0d35525137eb89c76eb5e719d50ae54387dbeb7152b2397b7765f387a062a0"
+    },
+    "scope_Qwen-0.5B": {
+      "path": "results/Qwen_Qwen2.5-0.5B-Instruct_fp32/pgd/pgd_sentiment_b0.0085.jsonl",
+      "sha256": "3ac670b05d1fddad5ad1ef66588667b1563a47f6bb89c94d3ca8d6ee3fca8260"
+    },
+    "scope_Qwen-1.5B": {
+      "path": "results/Qwen_Qwen2.5-1.5B-Instruct_fp32/pgd/pgd_sentiment_b0.0085.jsonl",
+      "sha256": "be4558be3d0af4a5f4b182e4af0fc67c17c1e93a657c8203f2bc3098a7900872"
+    },
+    "scope_Qwen-3B": {
+      "path": "results/Qwen_Qwen2.5-3B-Instruct_fp32/pgd/pgd_sentiment_b0.0085.jsonl",
+      "sha256": "395c15339a1f7abcb84d2db17ad628a93233052c9c879cef85e021adaae4cdce"
+    },
+    "scope_Qwen-7B": {
+      "path": "results/Qwen_Qwen2.5-7B-Instruct_fp32/pgd/pgd_sentiment_b0.0085.jsonl",
+      "sha256": "c18814dd359a8c4d1eba9a3b90c91a2511604949cf7939505658b522c287af06"
+    },
+    "scope_gemma-3-1b": {
+      "path": "results/google_gemma-3-1b-it_fp32/pgd/pgd_sentiment_b0.0085.jsonl",
+      "sha256": "30e7a941f0980911ad676a91e82083ebc269d6e775e3fb360ae5aa5ac6d980f3"
+    },
+    "scope_gpt2": {
+      "path": "results/gpt2_fp32/pgd/pgd_sentiment_b0.0085.jsonl",
+      "sha256": "6be11568b382a32815dbdfae7e2425e1f21938bcc748458e2cf8f56e0e99bca4"
+    },
+    "single_layer": {
+      "path": "results/current/single-layer-2026-09-08.json",
+      "sha256": "6b96334d87ed35798ae0b9914f771c02ddcbf970822dfe3cf46a1d44b1dfc784"
+    },
+    "single_layer_deploy": {
+      "path": "results/current/single-layer-deploy-2026-09-08.json",
+      "sha256": "35dd8bee7dd5b041b120575a54ed1ac0d012db4fe5cef243daeb3f246a111068"
+    },
+    "summary_Llama-3.2-1B": {
+      "path": "results_cuda/meta-llama_Llama-3.2-1B-Instruct_fp16/pgd_sipit/tpr_summary_rolezlog_k1_fpr5_n75.json",
+      "sha256": "aa8441d77eaf4d9ad8182c4a62a1c10d3e94bfd2e1cb91c0e8e17b3081252f8a"
+    },
+    "summary_Qwen-0.5B (n=50)": {
+      "path": "results/Qwen_Qwen2.5-0.5B-Instruct_n50/pgd_sipit/tpr_summary_rolezlog_k1_fpr5_n100.json",
+      "sha256": "659ab30979b1088bc52bf80f8db8d224708036c0fb60357eee4c3b1a2ec687f4"
+    },
+    "summary_Qwen-1.5B": {
+      "path": "results_cuda/Qwen_Qwen2.5-1.5B-Instruct_fp16/pgd_sipit/tpr_summary_rolezlog_k1_fpr5_n75.json",
+      "sha256": "e111b65540a90111c472c59a6ecbbac9f07320a44c2e5059726c7f3be886b950"
+    },
+    "summary_Qwen-7B": {
+      "path": "results_cuda/Qwen_Qwen2.5-7B-Instruct_fp16/pgd_sipit/tpr_summary_rolezlog_k1_fpr5_n75.json",
+      "sha256": "1cac38757bf1b6a90449894c76b87648d211a4f27a74a4bb014aacf75f802e45"
+    },
+    "summary_gemma-3-1b": {
+      "path": "results_cuda/google_gemma-3-1b-it_fp16/pgd_sipit/tpr_summary_rolezlog_k1_fpr5_n75.json",
+      "sha256": "0de15ea0f8dd66df66aa5149219b348d4b284a2bf5999539a90ab9ff77e571bc"
+    }
+  }
+}
