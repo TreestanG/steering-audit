@@ -1,3 +1,5 @@
+import os
+
 from behaviors import PROMPT_PAIRS, Behavior, Item
 from log import get_logger
 from utils import require_model
@@ -38,8 +40,12 @@ def _chat(messages: list[dict]) -> str:
     the tokenizer will re-add it, so the rendered prompt round-trips to itself.
     """
     _, tokenizer = require_model()
+    # Llama 3.x stamps today's date into the system header, so a run inverts different
+    # tokens from the bank it is scored against. AAT_CHAT_DATE pins it.
+    date = os.environ.get("AAT_CHAT_DATE", "").strip()
     text = tokenizer.apply_chat_template(messages, tokenize=False,
-                                         add_generation_prompt=True)
+                                         add_generation_prompt=True,
+                                         **({"date_string": date} if date else {}))
     assert isinstance(text, str)
     bos = getattr(tokenizer, "bos_token", None)
     if bos and text.startswith(bos) and \

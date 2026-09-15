@@ -267,7 +267,7 @@ class DetectorSurrogate:
     """
 
     def __init__(self, cal: dict, clean: dict, layer: int, *, sigma_target: float, beta: float,
-                 rule: str = "layer"):
+                 rule: str = "layer", layers: list[int] | None = None):
         if rule not in RULES:
             raise ValueError(f"rule must be one of {RULES}, got {rule!r}")
         model, _ = require_model()
@@ -277,7 +277,14 @@ class DetectorSurrogate:
         margin = float(cal["sigma"]) - sigma_target
         self.sigma_any_target = float(cal.get("sigma_any", float("inf"))) - margin
         stats = cal["role_stats"]
-        self.layers = [k for k in range(layer, model.config.num_hidden_layers + 1) if str(k) in stats]
+        self.read = sorted(set(layers)) if layers else None
+        self.layers = [k for k in range(layer, model.config.num_hidden_layers + 1)
+                       if str(k) in stats and (self.read is None or k in self.read)]
+        if self.read is not None:
+            missing = [k for k in self.read if k not in self.layers]
+            if missing:
+                raise ValueError(f"--penalty_layers {missing} are not calibrated layers at "
+                                 f"or after the injection layer {layer}")
         chat_ids = tuple(cal["chat_ids"]) if cal.get("chat_ids") else None
         scheme, end_cap, header = (cal.get("content_scheme", "pooled"), cal.get("end_cap", 6),
                                    cal.get("chat_header_len", 3))
@@ -468,6 +475,7 @@ class DetectorSurrogate:
                 "z_surrogate_run": best,
                 "z_surrogate_any": n_any,
                 "flagged_surrogate": bool(best >= self.min_run or n_any > 0),
+                "flagged_surrogate_target": bool(any(v > self.sigma_target for v in by_layer.values())),
                 "z_surrogate_run_scan": best_scan,
                 "flagged_surrogate_scan": bool(best_scan >= self.min_run or n_any > 0),
                 "z_surrogate_roles": self.roles[b],
@@ -782,6 +790,7 @@ def pgd_attack_batch(
     penalty_sigma: float | None = None,
     penalty_beta: float = 4.0,
     penalty_rule: str = "layer",
+    penalty_layers: list[int] | None = None,
     penalty_warm_start: int = 0,
     penalty_dual: float = 0.0,
     penalty_dual_max: float = 100.0,
@@ -803,7 +812,7 @@ def pgd_attack_batch(
     if detector_cal is not None:
         target = penalty_sigma if penalty_sigma is not None else float(detector_cal["sigma"]) - 0.5
         detector = DetectorSurrogate(detector_cal, clean, layer, sigma_target=target, beta=penalty_beta,
-                                     rule=penalty_rule)
+                                     rule=penalty_rule, layers=penalty_layers)
     batch, hidden = clean["batch"], model.config.hidden_size
     radius = budget * (clean["h_norm_at"] if multi else clean["h_norm"])
     lr0 = (0.1 * radius if lr is None
@@ -841,7 +850,8 @@ def pgd_attack_batch(
     best_delta = torch.zeros(*shape, device=device)
     restarts: list[list[dict]] = [[] for _ in range(batch)]
     dual = detector is not None and penalty_dual > 0
-    flag_key = ("flagged_surrogate_scan" if detector is not None and detector.rule == "scan"
+    flag_key = ("flagged_surrogate_target" if detector is not None and detector.read
+                else "flagged_surrogate_scan" if detector is not None and detector.rule == "scan"
                 else "flagged_surrogate")
     for name, init in inits:
         delta = project(init.to(device=device, dtype=torch.float32))
@@ -926,7 +936,8 @@ def pgd_attack_batch(
             "detector_penalty": None if detector is None else {
                 "weight": penalty_weight, "sigma_target": detector.sigma_target,
                 "beta": penalty_beta, "sigma": float(detector_cal["sigma"]),
-                "rule": penalty_rule, "warm_start": penalty_warm_start,
+                "rule": penalty_rule, "layers": penalty_layers,
+                "warm_start": penalty_warm_start,
                 "dual": penalty_dual, "dual_max": penalty_dual_max},
             "seed": seeds[b],
             "best_init": record["init"],
@@ -1149,6 +1160,12 @@ def main():
                              "detect.scan probes (stride, dense tail), sigma_any at the rest. "
                              "Applies to both the penalty and the 'detector' projection "
                              "constraint")
+    parser.add_argument("--penalty_layers", type=str, default="",
+                        help="hold the surrogate under --penalty_sigma at these layers only "
+                             "(comma-separated), instead of at every layer from the "
+                             "injection onward. The attacker that knows which layer is "
+                             "logged: free to deviate everywhere else. Applies to both the "
+                             "penalty and the 'detector' projection constraint")
     parser.add_argument("--penalty_dual", type=float, default=0.0,
                         help="dual-ascent step on a per-constraint, per-row multiplier "
                              "(initialised at --penalty_weight): a constraint's weight grows "
@@ -1219,6 +1236,7 @@ def main():
     rel_tol = args.rel_tol if args.rel_tol is not None else _ratio(budget, args.budget_frac)
     delta_dtype = DTYPES[args.delta_dtype] if args.delta_dtype else None
     detector_cal = json.loads(args.detector_cal.read_text()) if args.detector_cal else None
+    penalty_layers = [int(x) for x in args.penalty_layers.split(",") if x.strip()] or None
     if detector_cal is not None and detector_cal.get("statistic") != "role_z":
         raise SystemExit(f"{args.detector_cal}: the surrogate is built for statistic role_z, "
                          f"got {detector_cal.get('statistic')!r}")
@@ -1343,6 +1361,7 @@ def main():
         "penalty_weight": args.penalty_weight if args.detector_cal else None,
         "penalty_sigma": args.penalty_sigma,
         "penalty_rule": args.penalty_rule if args.detector_cal else None,
+        "penalty_layers": penalty_layers if args.detector_cal else None,
         "penalty_warm_start": args.penalty_warm_start if args.detector_cal else None,
         "penalty_dual": args.penalty_dual if args.detector_cal else None,
     }
@@ -1379,7 +1398,8 @@ def main():
                             delta_dtype=delta_dtype,
                             detector_cal=detector_cal, penalty_weight=args.penalty_weight,
                             penalty_sigma=args.penalty_sigma, penalty_beta=args.penalty_beta,
-                            penalty_rule=args.penalty_rule, penalty_warm_start=args.penalty_warm_start,
+                            penalty_rule=args.penalty_rule, penalty_layers=penalty_layers,
+                            penalty_warm_start=args.penalty_warm_start,
                             penalty_dual=args.penalty_dual, penalty_dual_max=args.penalty_dual_max,
                         )
                         batch_deltas = [r.pop("delta") for r in results]
@@ -1420,9 +1440,17 @@ def main():
                                              args.seed + i)
                                 for b, i in enumerate(idxs)
                             ])
+                        det = None
+                        if constraint == "detector":
+                            assert detector_cal is not None
+                            sig = (args.penalty_sigma if args.penalty_sigma is not None
+                                   else float(detector_cal["sigma"]) - 0.5)
+                            det = DetectorSurrogate(detector_cal, clean, layer, sigma_target=sig,
+                                                    beta=args.penalty_beta, rule=args.penalty_rule,
+                                                    layers=penalty_layers)
                         delta = _project(_as_batch(raw, clean), budget=budget, clean=clean,
                                          layer=layer, constraint=constraint,
-                                         max_backoff=args.max_backoff)
+                                         max_backoff=args.max_backoff, detector=det)
                         batch_deltas = [delta[b] for b in range(len(chunk))]
                         records = evaluate_deltas(
                             layer, delta, clean=clean, budget=budget,

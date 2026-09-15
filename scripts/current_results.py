@@ -362,6 +362,7 @@ def baselines_reading() -> str:
 
 
 # ----------------------------------------------------------- one logged layer
+read_layer_runs = load("read_layer", "results/current/read-layer-2026-09-15.json")
 single = load("single_layer", "results/current/single-layer-2026-09-08.json")
 single_deploy = load("single_layer_deploy", "results/current/single-layer-deploy-2026-09-08.json")
 maha = load("mahalanobis_qwen05b", "results/current/mahalanobis-qwen05b-2026-09-08.json")
@@ -613,6 +614,151 @@ def mahalanobis_reading() -> str:
                                         rel["pgd|0.3"], rel["pgd|0.3"] / rel["pgd|0.0085"], bank_lw, n))
 
 
+
+
+# ------------------------------------------------- the attacker that knows the read layer
+def _read_runs() -> list[dict]:
+    return [e for e in read_layer_runs if "cells" in e]
+
+
+def _read_attack(name: str) -> list[dict]:
+    for e in read_layer_runs:
+        if e.get("attack_dir", "").find(name) >= 0:
+            return e["rows"]
+    return []
+
+
+def read_layer_table() -> str:
+    head = ("| model | watched layer | budget | attacker | budget kept at injection | flagged at "
+            "the watched layer | worst other layer | any layer | shipped rule | judged gains |\n"
+            + "|---" * 10 + "|")
+    rows = []
+    for e in _read_runs():
+        inj, watched = e["inj_layer"], e["read_layers"]
+        for c in sorted(e["cells"], key=lambda c: (c["arm"], c["budget"])):
+            if c["arm"] == "random":
+                continue
+            n = c["n"]
+            if c["arm"] == "clean":
+                at = " / ".join("%d/%d" % (c["per_layer"][str(L)]["flagged"], n) for L in watched)
+                worst = max(((c["per_layer"][str(L)]["flagged"], L) for L in e["layers"]
+                             if L not in watched), default=(0, 0))
+                rows.append("| %s | %s | - | clean arm | - | %s | %d/%d (L%d) | %d/%d | %d/%d | - |"
+                            % (e["model"].split()[0], ",".join(map(str, watched)), at, worst[0], n,
+                               worst[1], c["flagged_any_layer"], n, c["flagged_shipped_rule"], n))
+                continue
+            free = "free" in e["model"]
+            at = " / ".join("%d/%d" % (c["per_layer"][str(L)]["flagged"], n) for L in watched)
+            others = [(c["per_layer"][str(L)]["flagged"], L) for L in e["layers"] if L not in watched]
+            worst = max(others, default=(0, 0))
+            j = c.get("judged") or {}
+            rows.append("| %s | %s | %g | %s | %.1f%% | %s | %d/%d (L%d) | %d/%d | %d/%d | %s |"
+                        % (e["model"].split()[0], "-" if free else ",".join(map(str, watched)),
+                           c["budget"], "free" if free else "read-constrained",
+                           100 * c["budget_used_median"], at, worst[0], n, worst[1],
+                           c["flagged_any_layer"], n, c["flagged_shipped_rule"], n,
+                           ("%d (%d gated), %d unflagged at the watched layer"
+                            % (j["gains"], j["gated_gains"], j["gated_gains_unflagged_at_read"]))
+                           if j else "-"))
+    return "\n".join([head] + rows)
+
+
+def read_layer_reading() -> str:
+    read_runs = [e for e in _read_runs() if "free" not in e["model"]]
+    free_runs = [e for e in _read_runs() if "free" in e["model"]]
+    kept, at_read, elsewhere, absolute, peaks, any_rate = [], [], [], [], [], []
+    for e in read_runs:
+        model, watched = e["model"].split()[0], e["read_layers"]
+        for c in e["cells"]:
+            if c["arm"] != "pgd":
+                continue
+            kept.append(100 * c["budget_used_median"])
+            peaks.append(c["dev_peak_median"])
+            absolute.append(("%s layer %s" % (model, ",".join(map(str, watched))),
+                             c["budget"], c["dev_injection_median"]))
+            at_read.append(max(c["per_layer"][str(L)]["flagged"] for L in watched) / c["n"])
+            others = [(c["per_layer"][str(L)]["flagged"], L) for L in e["layers"] if L not in watched]
+            elsewhere.append(max(others, default=(0, 0))[0] / c["n"])
+            any_rate.append(c["flagged_any_layer"] / c["n"])
+    gains_free = sum((c.get("judged") or {}).get("gains", 0) for e in free_runs for c in e["cells"])
+    gated_free = sum((c.get("judged") or {}).get("gated_gains", 0) for e in free_runs for c in e["cells"])
+    undetected_free = sum((c.get("judged") or {}).get("gated_gains_unflagged_at_read", 0)
+                          for e in free_runs for c in e["cells"])
+    gains_read = sum((c.get("judged") or {}).get("gains", 0) for e in read_runs for c in e["cells"])
+    judged_read = sum((c.get("judged") or {}).get("n", 0) for e in read_runs
+                      for c in e["cells"] if c["arm"] == "pgd")
+    pairs = collections.defaultdict(list)
+    for key, budget, dev in absolute:
+        pairs[key].append((budget, dev))
+    ratio = []
+    for key, vals in pairs.items():
+        vals = sorted(vals)
+        if len(vals) >= 2 and vals[0][1]:
+            ratio.append("%s %.2fx" % (key, vals[-1][1] / vals[0][1]))
+    return ("**Reading.** Holding one logged layer under its alarm costs the attacker the "
+            "perturbation: the retained budget at the injection site is %.1f%% to %.1f%% across "
+            "the cells, and the largest deviation anywhere in the trajectory is %.1e, %.1f times "
+            "the legal budget 0.0085 that the ladders above treat as the quiet end of the scale. "
+            "The outer ball is not what binds: the absolute deviation the ceiling admits is the same "
+            "at budget 0.12 and 0.30 (%s), so a larger injection budget buys nothing and the "
+            "budget column could be raised without changing the result. Silence is local, not "
+            "global: at the watched layer the attack is flagged on at most %.0f%% of prompts in "
+            "any cell, while some other layer flags up to %.0f%% of the same prompts and the "
+            "uncorrected any-layer read up to %.0f%%. "
+            "Behaviour does not survive the constraint. Over every read-constrained cell, %d of "
+            "%d judged completions is a gain over its own clean arm; the same attacker with no "
+            "constraint past the injection ball takes %d gains (%d passing the StrongREJECT "
+            "gate), and every one of them is flagged at the watched layer (%d unflagged). The "
+            "norm-matched random arm under the same ceiling keeps more budget than the optimised "
+            "one and is flagged at the injection layer instead, because a random direction does "
+            "not concentrate where the constraint bites. Caveats: 15 prompts per cell except "
+            "Qwen-0.5B, thresholds in-sample at 5%% per layer with the ladder's own clean arm as "
+            "the held-out check, one injection layer at 0.7 of depth, one position, and a ceiling "
+            "the attacker aims at rather than a guarantee it lands under."
+            % (min(kept), max(kept), max(peaks), max(peaks) / 0.0085, "; ".join(ratio),
+               100 * max(at_read), 100 * max(elsewhere), 100 * max(any_rate),
+               gains_read, judged_read, gains_free, gated_free, undetected_free))
+
+
+def read_layer_sweep_table() -> str:
+    rows = _read_attack("sweep")
+    if not rows:
+        return "_(no ceiling sweep on disk)_"
+    base = [c for e in _read_runs() for c in e["cells"]
+            if "read16" in e["model"] and c["arm"] == "pgd" and c["budget"] == 0.3]
+    head = ("| ceiling at the watched layer | budget kept | deviation at injection | peak "
+            "deviation | target log-prob gain | next-token changes | judged jailbreaks |\n"
+            + "|---" * 7 + "|")
+    out = []
+    for c in base:
+        out.append("| %.2f (the layer's own threshold, minus the surrogate's error) | %.1f%% | %.2e | %.2e | %+.3f | %d/%d | %s |"
+                   % (c.get("ceiling") or float("nan"), 100 * c["budget_used_median"], c["dev_injection_median"],
+                      c["dev_peak_median"], c["d_target_logprob_median"], c["flips"], c["n"],
+                      "%d/%d" % ((c.get("judged") or {}).get("gains", 0), c["n"])))
+    for r in sorted(rows, key=lambda r: r["ceiling"]):
+        out.append("| %.0f | %.1f%% | %.2e | %.2e | %+.3f | %d/%d | %s |"
+                   % (r["ceiling"], 100 * r["budget_used_median"], r["dev_injection_median"],
+                      r["peak_median"], r["d_target_logprob_median"], r["flips"], r["n"],
+                      "%s/%d" % (r.get("judged_gains"), r["n"])))
+    return "\n".join([head] + out)
+
+
+def read_layer_nosculpt_line() -> str:
+    rows = _read_attack("nosculpt")
+    if not rows:
+        return ""
+    parts = ", ".join("layer %s %.2f%%" % (r["read_layers"], 100 * r["budget_used_median"])
+                      for r in rows)
+    guided = [c for e in _read_runs() for c in e["cells"]
+              if c["arm"] == "pgd" and c["budget"] == 0.3 and "free" not in e["model"]
+              and "Llama" in e["model"]]
+    g = ", ".join("%.2f%%" % (100 * c["budget_used_median"]) for c in guided)
+    return ("With the guiding gradient switched off, so the attacker only projects a "
+            "target-driven direction back under the ceiling, the retained budget is the same "
+            "(%s against %s guided, Llama-3.2-1B at budget 0.30). The sculpting term is not "
+            "what limits the attack." % (parts, g))
+
+
 # ----------------------------------------------------------------------------- text
 fp = provenance.code_fingerprint()
 sb = cluster["sweep_b"]["pooled"]
@@ -813,6 +959,33 @@ the clean one at the injected position, median over prompts, with that era's che
 {amplification_table()}
 
 {amplification_reading()}
+
+## The attacker that knows which layer is logged
+
+Every attack above is constrained at the injection layer and every later one, or under the
+detector's own score at every layer from the injection onward. Neither is the attacker a
+single-layer read has to survive: one who knows which layer the auditor holds, spends a
+behaviour-changing perturbation at the injection site, and only has to look clean at that
+one layer. Two limits, not one: an outer ball at the injection layer (the budget column),
+and a ceiling on the detector's own score at the watched layer, set at that layer's
+in-sample 95th-percentile threshold minus 0.3 for the surrogate's error. The surrogate is
+accurate: predicted against realised score at the watched layer differs by 0.01 to 0.10 on
+the models measured. `free` is the same attacker with no constraint past the injection
+ball, which is not the `all` scope above and spends its whole budget. Arms: `pgd`,
+`random` under the same ceiling, and each budget's own clean arm. Rows are inverted at every
+layer from the injection onward and read one layer at a time against that layer's own
+threshold, the single-layer rule of the section above. Driver: `scripts/read_layer_reread.py`.
+
+{read_layer_table()}
+
+{read_layer_reading()}
+
+**What the attacker buys by accepting detection.** The ceiling at the watched layer raised
+from that layer's threshold upward, Llama-3.2-1B at layer 16, budget 0.30, n=15:
+
+{read_layer_sweep_table()}
+
+{read_layer_nosculpt_line()}
 
 ### A raw-state density baseline (Qwen-0.5B, n=50)
 

@@ -73,6 +73,62 @@ LADDERS: dict[str, Ladder] = {lad.label: lad for lad in (
 )}
 
 
+@dataclass(frozen=True)
+class ReadRun:
+    """One read-layer attack tree: the attacker held the surrogate under a ceiling at
+    `read_layers` only, or (free) at nothing."""
+    label: str
+    model: str
+    slug: str
+    root: Path
+    calibration: Path
+    bank_layers: Path
+    read_layers: tuple[int, ...]
+    n_prompts: int
+
+    @property
+    def rows(self) -> Path:
+        return self.root / "pgd_sipit" / "pgd_rows.jsonl"
+
+    @property
+    def ladder_dir(self) -> Path:
+        return self.root / "pgd" / "ladder"
+
+
+def _read(model: str, tag: str, read_layers: tuple[int, ...], n_prompts: int,
+          calibration: str, bank: str, root: str = "results_cuda") -> ReadRun:
+    slug = model.replace("/", "_")
+    fp16 = Path(root) / f"{slug}_fp16"
+    return ReadRun(f"{slug.split('_')[-1]} {tag}", model, slug, Path(root) / f"{slug}_{tag}",
+                   fp16 / "sipit" / calibration, fp16 / "sipit" / bank, read_layers, n_prompts)
+
+
+_N75 = ("detector_calibration_rolezlog_k1_fpr5_n75.json", "chat_bank_n75/layers")
+_QWEN = _N75
+
+READ_RUNS: dict[str, ReadRun] = {r.label: r for r in (
+    _read("meta-llama/Llama-3.2-1B-Instruct", "read15", (15,), 15, *_N75),
+    _read("meta-llama/Llama-3.2-1B-Instruct", "read16", (16,), 15, *_N75),
+    _read("meta-llama/Llama-3.2-1B-Instruct", "free", (15, 16), 15, *_N75),
+    _read("google/gemma-3-1b-it", "read22", (22,), 15, *_N75),
+    _read("google/gemma-3-1b-it", "read26", (26,), 15, *_N75),
+    _read("google/gemma-3-1b-it", "free", (22, 26), 15, *_N75),
+    _read("meta-llama/Llama-3.2-1B-Instruct", "read16n50", (16,), 50, *_N75),
+    _read("meta-llama/Llama-3.2-1B-Instruct", "freen50", (16,), 50, *_N75),
+    _read("Qwen/Qwen2.5-0.5B-Instruct", "read24", (24,), 25, *_N75),
+    _read("Qwen/Qwen2.5-0.5B-Instruct", "free", (24,), 25, *_N75),
+)}
+
+
+def select_read(labels: list[str] | None) -> list[ReadRun]:
+    if not labels or labels == ["all"]:
+        return list(READ_RUNS.values())
+    unknown = [x for x in labels if x not in READ_RUNS]
+    if unknown:
+        raise SystemExit(f"unknown read run {unknown}; choose from {list(READ_RUNS)}")
+    return [READ_RUNS[x] for x in labels]
+
+
 def select(labels: list[str] | None) -> list[Ladder]:
     """No labels, or `all`, means every ladder in table order."""
     if not labels or labels == ["all"]:
