@@ -25,6 +25,9 @@ results/**
 !results/*/behavior/*/*/gaps.json
 !results/*/behavior/*/*/evaluations.json
 !results/*/behavior/*/*/detection_vs_efficacy.json
+# Small current-results artifacts that RESULTS.md and its manifest are generated from
+!results/current/*.json
+!results/current/baselines/*.json
 
 # CUDA-computed rows, kept apart from the MPS results tree
 results_cuda/
