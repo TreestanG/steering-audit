@@ -5,7 +5,7 @@
     "provenance": {
       "calibration": "sipit/detector_calibration_rolezlog_k1_fpr5_n100.json",
       "calibration_sha256": "4098a0ef129c027751cb44f73604acc29729d515d2f5037c1a53efac6a8442ec",
-      "join_rows_sha256": "f330187922b93fa49a87636dd363cc1008b6b57e1261d28c6b978974a1027864",
+      "join_rows_sha256": "34fb3a5f9d85bfbec4238e005bea3bcdc9ef7b2ab2923810c6fbb90d454437c2",
       "generation_sha256": {
         "jbb_refusal_harmful_b0.0085_gen.json": "65d88ea1007b655c1c8453f07d83680677b2dc544c662a8b329471fa55a5dbd0",
         "jbb_refusal_harmful_b0.02_gen.json": "b02fda2409a3566a218d252d06b16b8049691ce441efa035dfd900801e46a3fc",
