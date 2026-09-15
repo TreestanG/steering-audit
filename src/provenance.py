@@ -35,6 +35,11 @@ def stamp(**inputs: Path | str | None) -> dict:
     """A provenance block: code fingerprint plus sha256 of each named input file."""
     out = {"code": code_fingerprint(), "inputs": {}}
     for name, path in inputs.items():
-        if path is not None and Path(path).exists():
-            out["inputs"][name] = {"path": str(path), "sha256": file_sha256(path)}
+        if path is None:
+            continue
+        p = Path(path)
+        q = p if p.is_absolute() else ROOT / p
+        if q.exists():
+            shown = q.relative_to(ROOT).as_posix() if q.is_relative_to(ROOT) else str(path)
+            out["inputs"][name] = {"path": shown, "sha256": file_sha256(q)}
     return out
