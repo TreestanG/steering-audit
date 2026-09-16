@@ -36,6 +36,7 @@ def grade(path: Path, styles: list[str], model: str, workers: int, force: bool) 
         for r, s, b in zip(rows, scores, binary):
             r[f"judge_{style}_score"] = None if s != s else float(s)
             r[f"judge_{style}"] = b
+            r[f"judge_{style}_status"] = "failed" if b is None else "graded"
         ungraded = sum(b is None for b in binary)
         by_arm = {}
         for arm in sorted({r["arm"] for r in rows}):
