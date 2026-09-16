@@ -237,6 +237,8 @@ def main():
     parser.add_argument("--prompt_format", type=str, default="auto",
                         choices=list(prompt_format.FORMATS))
     parser.add_argument("--rel_tol", type=float, default=None)
+    parser.add_argument("--rel_tol_by_layer", type=str, default=None,
+                        help="JSON with a per-layer relative tolerance (see sipit.py)")
     parser.add_argument("--vocab_path", type=str, default=None)
     parser.add_argument("--calibrations", type=str,
                         default="detector_calibration.json,detector_calibration_k1.json")
@@ -285,10 +287,13 @@ def main():
 
     dtype = DTYPES[args.dtype]
     rel_tol = rel_tol_for(dtype) if args.rel_tol is None else args.rel_tol
+    if args.rel_tol_by_layer:
+        rel_tol = sipit.load_rel_tol_by_layer(args.rel_tol_by_layer, rel_tol)
     model, tokenizer = load_model(args.model_name, dtype=dtype, device=args.device)
     n_layers = model.config.num_hidden_layers + 1
-    logger.info("model on %s, %s, rel_tol %g | injection layer %d, budget %g, "
-                "%d position(s), objective %s", model_device(), args.dtype, rel_tol,
+    logger.info("model on %s, %s, rel_tol %s | injection layer %d, budget %g, "
+                "%d position(s), objective %s", model_device(), args.dtype,
+                f"per layer from {args.rel_tol_by_layer}" if args.rel_tol_by_layer else rel_tol,
                 inj_layer, budget, n_positions, args.objective)
     if inj_layer >= n_layers - 1:
         raise SystemExit(f"injection layer {inj_layer} is the final block; the "
@@ -446,6 +451,7 @@ def main():
                     "inj_matched": all(bool(x["matched"]) for x in inj_steps),
                     "n_injected": len(inj_pos),
                     "stop_on": args.stop_on,
+                    "rel_tol_by_layer": args.rel_tol_by_layer,
                     "prefix_reused": len(known) if known else 0,
                     # >1: this row's injected position came out of one candidate scan
                     # shared by that many layers (elapsed is the scan time split evenly)

@@ -76,6 +76,20 @@ def match_tol(target: Tensor, rel_tol: float, abs_tol: float) -> float:
     return rel_tol * float(target.norm())
 
 
+def rel_tol_at(rel_tol, layer: int) -> float:
+    """rel_tol is one float for every layer, or a per-layer dict with a 'base' fallback."""
+    if isinstance(rel_tol, dict):
+        return rel_tol.get(layer, rel_tol["base"])
+    return rel_tol
+
+
+def load_rel_tol_by_layer(path, base: float) -> dict:
+    d = json.loads(Path(path).read_text())
+    out = {int(k): float(v) for k, v in d.get("layers", d).items()}
+    out["base"] = base
+    return out
+
+
 # --stop_on: 'miss' ends a scan at the first position over tolerance (the deployment
 # rule, where gold is unknown); 'wrong' ends it only where the recovered token is known
 # to differ from gold, so a correct token over the numerics floor -- Qwen's massive
@@ -338,7 +352,7 @@ def solve_position_multi(
     model, _ = require_model()
     vocab_size = int(model.config.vocab_size)
     order = torch.argsort(logits[:vocab_size], descending=True)
-    tol = {l: match_tol(t, rel_tol, abs_tol) for l, t in targets.items()}
+    tol = {l: match_tol(t, rel_tol_at(rel_tol, l), abs_tol) for l, t in targets.items()}
     top2 = {l: Top2() for l in targets}
     tried = {l: 0 for l in targets}
     open_layers = set(targets)
@@ -396,7 +410,7 @@ def sipit_multi(
         table = vocab_layer_for(l)
         top2 = Top2()
         top2.update(dists_to(targets[l][0], table), torch.arange(table.shape[0]))
-        steps[l] = [_step(top2, tol=match_tol(targets[l][0], rel_tol, abs_tol),
+        steps[l] = [_step(top2, tol=match_tol(targets[l][0], rel_tol_at(rel_tol, l), abs_tol),
                           h_norm=float(targets[l][0].norm()), tried=table.shape[0],
                           exhaustive=True, gold=gold_at(0))]
         del table
@@ -486,7 +500,7 @@ def solve_position(
     """Find the token whose h_layer at this position equals target."""
     model, _ = require_model()
     vocab_size = int(model.config.vocab_size)
-    tol = match_tol(target, rel_tol, abs_tol)
+    tol = match_tol(target, rel_tol_at(rel_tol, layer), abs_tol)
     order = torch.argsort(logits[:vocab_size], descending=True)
 
     top2 = Top2()
@@ -554,7 +568,7 @@ def sipit(
     steps.append(
         _step(
             top2,
-            tol=match_tol(target[0], rel_tol, abs_tol),
+            tol=match_tol(target[0], rel_tol_at(rel_tol, layer), abs_tol),
             h_norm=float(target[0].norm()),
             tried=n_vocab,
             exhaustive=True,  # position 0 is a full table lookup
@@ -819,6 +833,13 @@ def main():
         "own noise floor every position reports NO MATCH despite recovering the token.",
     )
     parser.add_argument(
+        "--rel_tol_by_layer",
+        type=str,
+        default=None,
+        help="JSON with a per-layer relative tolerance ({'layers': {layer: rel_tol}}), e.g. "
+        "scripts/deploy_tolerance.py's output; layers it omits use --rel_tol",
+    )
+    parser.add_argument(
         "--tol",
         type=float,
         default=0.0,
@@ -885,10 +906,13 @@ def main():
 
     vocab_path = args.vocab_path or str(vocab_table_path(args.model_name))
     dtype = DTYPES[args.dtype]
-    rel_tol: float = rel_tol_for(dtype) if args.rel_tol is None else float(args.rel_tol)
+    rel_tol = rel_tol_for(dtype) if args.rel_tol is None else float(args.rel_tol)
+    if args.rel_tol_by_layer:
+        rel_tol = load_rel_tol_by_layer(args.rel_tol_by_layer, rel_tol)
     model, tokenizer = load_model(args.model_name, dtype=dtype, device=args.device)
     stop_on = "never" if args.no_stop_on_fail else args.stop_on
-    logger.info("model on %s, %s, rel_tol %g, stop_on %s", model_device(), args.dtype, rel_tol,
+    logger.info("model on %s, %s, rel_tol %s, stop_on %s", model_device(), args.dtype,
+                f"per layer from {args.rel_tol_by_layer}" if args.rel_tol_by_layer else rel_tol,
                 stop_on)
 
     gold_by_id: dict[str, str] = {}
