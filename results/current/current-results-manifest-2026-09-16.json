@@ -1,9 +1,9 @@
 {
-  "generated": "2026-09-15",
+  "generated": "2026-09-16",
   "code": {
-    "git_head": "6d05757e684596a42558f56d0de1cc0925065a42",
+    "git_head": "f327b5b23281097e1cb856b10913574e64292b2b",
     "git_dirty": true,
-    "source_sha256": "83bc1b7ed41ddee4501e35ffe787a8ec47c563f1d226f69a377e391a524fa471"
+    "source_sha256": "befc20264ab6733f084e551475f69b7bec89e95629f12d96ab2ec0195bb18fc0"
   },
   "files": {
     "baselines_Llama-3.2-1B": {
@@ -29,6 +29,18 @@
     "cluster_rates": {
       "path": "results/current/cluster-rates-2026-09-07.json",
       "sha256": "3a46a6a04dbc1f13497d24877df165698800646f2e00a9611ca507b4da675e13"
+    },
+    "deploy_run_Qwen-1.5B": {
+      "path": "results_cuda/Qwen_Qwen2.5-1.5B-Instruct_fp16_deploy/deploy_compare_smoke.json",
+      "sha256": "3f83e0d0e566b1d46d4c8a4949b2b51610dd6cf7efa83e005bfb993035a95606"
+    },
+    "deploy_run_gemma-3-1b": {
+      "path": "results_cuda/google_gemma-3-1b-it_fp16_deploy/deploy_compare_smoke.json",
+      "sha256": "77809de68834df5ed040f0f175d30411d7a7083f9ae0b19da43743ba15c9e7cc"
+    },
+    "deploy_tolerance": {
+      "path": "results/current/deploy-tolerance-2026-09-15.json",
+      "sha256": "e5f5d12180c6575c75135c0bc6cd9e423d2be5f251a4c31d6bcb9121df89a0f8"
     },
     "deployment_stop_rescore": {
       "path": "results/current/deployment-stop-2026-09-08.json",
@@ -184,7 +196,7 @@
     },
     "read_layer": {
       "path": "results/current/read-layer-2026-09-15.json",
-      "sha256": "32d83381a850dbfd28cca17ce7b98306d71e67c19283d90ff911a7355d1c22f5"
+      "sha256": "f097e135fdb34544f59ea7374ed2c26d25971253ff8771332f09b5ecd99a3ac2"
     },
     "scope_Qwen-0.5B": {
       "path": "results/Qwen_Qwen2.5-0.5B-Instruct_fp32/pgd/pgd_sentiment_b0.0085.jsonl",

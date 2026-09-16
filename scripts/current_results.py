@@ -44,6 +44,11 @@ cluster = load("cluster_rates", "results/current/cluster-rates-2026-09-07.json")
 transitions_path = sorted(glob.glob(str(ROOT / "results/current/n50-transitions-*.json")))[-1]
 trans = load("n50_transitions", Path(transitions_path).relative_to(ROOT))
 deploy = load("deployment_stop_rescore", "results/current/deployment-stop-2026-09-08.json")
+deploy_tol_path = sorted(glob.glob(str(ROOT / "results/current/deploy-tolerance-*.json")))[-1]
+deploy_tol = load("deploy_tolerance", Path(deploy_tol_path).relative_to(ROOT))
+for _entry in deploy_tol:
+    if "deployment_run" in _entry:
+        load("deploy_run_%s" % _entry["model"], _entry["deployment_run"]["report"]["path"])
 repeats = {}
 for f in sorted(glob.glob(str(ROOT / "results/Qwen_Qwen2.5-0.5B-Instruct_n50/pgd/ladder/*_gen_judge_repeats.json"))):
     repeats[Path(f).name] = load(f"judge_repeats_{Path(f).stem}", Path(f).relative_to(ROOT))
@@ -228,6 +233,156 @@ def deployment_summary() -> str:
                  "have produced and would need refitting under the deployment rule." %
                  ", ".join(tainted)) if tainted else
                 "The calibrations are consistent with the deployment rule."))
+
+
+def verdict(v: dict) -> str:
+    return "%d / %d / %d" % (v["flagged"], v["clear"], v["unscorable"])
+
+
+def tolerance_rule() -> str:
+    t = deploy_tol[0]["tolerance"]
+    return "the larger of %g and %g times the largest clean residual / state norm at that layer" % (
+        t["base_rel_tol"], t["factor"])
+
+
+def names(xs: list[str]) -> str:
+    return xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " and " + xs[-1]
+
+
+def tolerance_fit_table() -> str:
+    lines = ["| model | bank prompts | layers above %g (largest tolerance) | bank rows cut before their last position: at %g / per layer | held-out prompts cut, mean (max) |"
+             % (deploy_tol[0]["tolerance"]["base_rel_tol"], deploy_tol[0]["tolerance"]["base_rel_tol"]),
+             "|---|---|---|---|---|"]
+    for e in deploy_tol:
+        t = e["tolerance"]
+        raised = {L: v for L, v in t["layers"].items() if v > t["base_rel_tol"]}
+        top = max(raised.items(), key=lambda kv: kv[1]) if raised else None
+        ho = t["held_out"]
+        lines.append("| %s | %d | %d%s | %d / %d | %.1f%% (%.1f%%) |" % (
+            e["model"], t["n_prompts"], len(raised),
+            " (layer %s, %.3f)" % top if top else "",
+            t["rows_cut_before_last_at_base"], t["rows_cut_before_last_at_tolerance"],
+            100 * ho["prompt_cut_rate_mean"], 100 * ho["prompt_cut_rate_max"]))
+    return "\n".join(lines)
+
+
+def tolerance_cells_table() -> str:
+    lines = ["| model | arm | budget | evaluator | deployment, flat %g | deployment, per layer |"
+             % deploy_tol[0]["tolerance"]["base_rel_tol"], "|---|---|---|---|---|---|"]
+    for e in deploy_tol:
+        for c in e["cells"]:
+            if not (c["changed_at_base"] or c["changed_at_tolerance"]):
+                continue
+            lines.append("| %s | %s | %g | %s | %s | %s%s |" % (
+                e["model"], c["arm"], c["budget"], verdict(c["evaluator"]), verdict(c["deployment_base"]),
+                verdict(c["deployment_tolerance"]), " **←**" if c["changed_at_tolerance"] else ""))
+    return "\n".join(lines)
+
+
+def tolerance_reread_line() -> str:
+    cells = sum(len(e["cells"]) for e in deploy_tol)
+    same = sum(1 for e in deploy_tol for c in e["cells"] if not c["changed_at_tolerance"])
+    cut_base = sum(e["rows_shortened_at_base"] for e in deploy_tol)
+    cut_tol = sum(e["rows_shortened_at_tolerance"] for e in deploy_tol)
+    rows = sum(e["rows"] for e in deploy_tol)
+    bank_cut = sum(e["tolerance"]["rows_cut_before_last_at_tolerance"] for e in deploy_tol)
+    return ("Saved rows cut at their first position over the per-layer tolerance, then rescored "
+            "with the saved calibrations: %d of %d ladder rows are shortened (%d at the flat "
+            "tolerance), %d of %d (arm, budget) cells give the evaluator's verdict on every prompt, "
+            "and %d calibration-bank rows are cut before their last position, so the saved "
+            "calibrations already describe what a deployment under this tolerance inverts." % (
+                cut_tol, rows, cut_base, same, cells, bank_cut))
+
+
+def deploy_run_table() -> str:
+    lines = ["| model | rows compared (bank + ladder) | tokens identical | residuals identical | rows cut short | misses before the last position |",
+             "|---|---|---|---|---|---|"]
+    for e in deploy_tol:
+        run = e.get("deployment_run")
+        if not run:
+            continue
+        parts = [run[k] for k in ("bank", "ladder") if k in run]
+        tot = lambda k: sum(p[k] for p in parts)
+        lines.append("| %s | %d + %d | %d | %d | %d | %d |" % (
+            e["model"], run.get("bank", {}).get("rows", 0), run.get("ladder", {}).get("rows", 0),
+            tot("tokens_identical"), tot("residuals_identical"), tot("deploy_shorter"),
+            tot("deploy_misses_before_last_position")))
+    return "\n".join(lines)
+
+
+def deploy_run_cells_table() -> str:
+    lines = ["| model | arm | budget | evaluator | deployment run |", "|---|---|---|---|---|"]
+    for e in deploy_tol:
+        run = e.get("deployment_run")
+        if not run or "ladder" not in run:
+            continue
+        for c in run["ladder"]["cells"]:
+            mark = " **←**" if c["changed_prompts"] else ""
+            lines.append("| %s | %s | %g | %s | %s%s |" % (
+                e["model"], c["arm"], c["budget"], verdict(c["evaluator"]), verdict(c["deployment_run"]), mark))
+    return "\n".join(lines)
+
+
+def deploy_run_scope() -> str:
+    parts = []
+    for e in deploy_tol:
+        run = e.get("deployment_run")
+        if not run:
+            continue
+        n_layers = len(e["tolerance"]["layers"])
+        bank_prompts = run.get("bank", {}).get("rows", 0) // n_layers if n_layers else 0
+        cells = run.get("ladder", {}).get("cells", [])
+        budgets = sorted({c["budget"] for c in cells if c["arm"] != "clean"})
+        n = max((c["evaluator"]["n"] for c in cells), default=0)
+        parts.append("%s: %d calibration-bank prompts at all %d layers, and the %d-prompt ladder's clean, pgd and "
+                     "random arms at budget%s %s" % (e["model"], bank_prompts, n_layers, n,
+                                                    "s" if len(budgets) > 1 else "",
+                                                    " and ".join("%g" % b for b in budgets)))
+    return "; ".join(parts)
+
+
+def tolerance_conclusion() -> str:
+    ran, not_ran = deploy_run_models()
+    reread_same = all(not c["changed_at_tolerance"] for e in deploy_tol for c in e["cells"])
+    run_cells_same = all(not c["changed_prompts"] for e in deploy_tol if "deployment_run" in e
+                         for c in e["deployment_run"].get("ladder", {}).get("cells", []))
+    if not (reread_same and deploy_run_identical() and run_cells_same):
+        return ("**Conclusion.** Under the per-layer tolerance the evaluator and deployment rules do not "
+                "agree everywhere; the cells marked above differ, so evaluator rates do not transfer as they stand.")
+    held = [e for e in deploy_tol if e["tolerance"]["held_out"]["prompt_cut_rate_mean"] > 0]
+    rest = ("%s %s on the saved-row re-read alone. " % (names(not_ran), "rests" if len(not_ran) == 1 else "rest")
+            if not_ran else "")
+    return ("**Conclusion: under the per-layer tolerance, evaluator and deployment rates transfer.** The "
+            "evaluator's `--stop_on wrong` consulted the gold token only to keep scanning past a correct "
+            "token over the flat tolerance. With the tolerance raised per layer from clean bank rows "
+            "alone, a deployment that halts at its first miss inverts the same tokens with the same "
+            "residuals, so the ladder rows and calibration banks are the rows a deployment produces, and "
+            "every rate computed from them, including the detection table above and the single-layer "
+            "reads below, is also the deployment rate on these data. Fresh deployment-mode runs reproduce "
+            "the evaluator rows exactly on %s. %s%s" % (
+                names(ran), rest,
+                ("The tolerance is fitted in-sample on each bank. Fitted on four folds and applied to the "
+                 "fifth, it cuts no held-out prompt except on %s, where %s of held-out prompts would still stop "
+                 "early and read as unscorable rather than clear." % (
+                     names([e["model"] for e in held]),
+                     names(["%.1f%%" % (100 * e["tolerance"]["held_out"]["prompt_cut_rate_mean"]) for e in held])))
+                if held else "Fitted on four folds and applied to the fifth, it cuts no held-out prompt on any model."))
+
+
+def deploy_run_models() -> tuple[list[str], list[str]]:
+    ran = [e["model"] for e in deploy_tol if "deployment_run" in e]
+    return ran, [e["model"] for e in deploy_tol if "deployment_run" not in e]
+
+
+def deploy_run_identical() -> bool:
+    for e in deploy_tol:
+        run = e.get("deployment_run")
+        for part in ([run[k] for k in ("bank", "ladder") if k in run] if run else []):
+            if not (part["tokens_identical"] == part["residuals_identical"] == part["rows"]
+                    and part["deploy_shorter"] == part["deploy_longer"] == part["unmatched_deploy_rows"] == 0
+                    and part["deploy_misses_before_last_position"] == 0):
+                return False
+    return True
 
 
 BASELINES = {label: lad.baselines for label, lad in MODELS.items()}
@@ -623,7 +778,7 @@ def _read_runs() -> list[dict]:
 
 def _read_attack(name: str) -> list[dict]:
     for e in read_layer_runs:
-        if e.get("attack_dir", "").find(name) >= 0:
+        if e.get("attack_dir", "").find(name) >= 0 and "Llama" in e.get("attack_dir", ""):
             return e["rows"]
     return []
 
@@ -720,26 +875,53 @@ def read_layer_reading() -> str:
                gains_read, judged_read, gains_free, gated_free, undetected_free))
 
 
+def _sweep_detect(model_hint: str) -> dict:
+    """ceiling -> flagged counts, from the sweep trees inverted after the fact."""
+    out = {}
+    for e in read_layer_runs:
+        d = e.get("sweep_detection")
+        if d and model_hint in d["tree"]:
+            z = float(d["tree"].split("_sweepz")[1].split("/")[0])
+            out[z] = d
+    return out
+
+
+def _sweep_detect(model_hint: str) -> dict:
+    """ceiling -> flagged counts, from sweep trees inverted after the fact."""
+    out = {}
+    for e in read_layer_runs:
+        d = e.get("sweep_detection")
+        if d and model_hint in d["tree"]:
+            out[float(d["tree"].split("_sweepz")[1].split("/")[0])] = d
+    return out
+
+
 def read_layer_sweep_table() -> str:
     rows = _read_attack("sweep")
     if not rows:
         return "_(no ceiling sweep on disk)_"
+    det = _sweep_detect("Llama")
     base = [c for e in _read_runs() for c in e["cells"]
-            if "read16" in e["model"] and c["arm"] == "pgd" and c["budget"] == 0.3]
+            if e["model"].endswith("read16") and c["arm"] == "pgd" and c["budget"] == 0.3]
     head = ("| ceiling at the watched layer | budget kept | deviation at injection | peak "
-            "deviation | target log-prob gain | next-token changes | judged jailbreaks |\n"
-            + "|---" * 7 + "|")
+            "deviation | flagged at the watched layer | target log-prob gain | next-token "
+            "changes | judged gains |\n" + "|---" * 8 + "|")
     out = []
     for c in base:
-        out.append("| %.2f (the layer's own threshold, minus the surrogate's error) | %.1f%% | %.2e | %.2e | %+.3f | %d/%d | %s |"
-                   % (c.get("ceiling") or float("nan"), 100 * c["budget_used_median"], c["dev_injection_median"],
-                      c["dev_peak_median"], c["d_target_logprob_median"], c["flips"], c["n"],
-                      "%d/%d" % ((c.get("judged") or {}).get("gains", 0), c["n"])))
+        at_read = list(c["flagged_read"].values())
+        out.append("| %.2f (the layer's own threshold, minus the surrogate's error) | %.1f%% | "
+                   "%.2e | %.2e | %d/%d | %+.3f | %d/%d | %d/%d |"
+                   % (c.get("ceiling") or float("nan"), 100 * c["budget_used_median"],
+                      c["dev_injection_median"], c["dev_peak_median"],
+                      at_read[0] if at_read else 0, c["n"], c["d_target_logprob_median"],
+                      c["flips"], c["n"], (c.get("judged") or {}).get("gains", 0), c["n"]))
     for r in sorted(rows, key=lambda r: r["ceiling"]):
-        out.append("| %.0f | %.1f%% | %.2e | %.2e | %+.3f | %d/%d | %s |"
+        d = det.get(r["ceiling"])
+        out.append("| %.0f | %.1f%% | %.2e | %.2e | %s | %+.3f | %d/%d | %s/%d |"
                    % (r["ceiling"], 100 * r["budget_used_median"], r["dev_injection_median"],
-                      r["peak_median"], r["d_target_logprob_median"], r["flips"], r["n"],
-                      "%s/%d" % (r.get("judged_gains"), r["n"])))
+                      r["peak_median"], "%d/%d" % (d["flagged_read"], d["n"]) if d else "-",
+                      r["d_target_logprob_median"], r["flips"], r["n"],
+                      r.get("judged_gains"), r["n"]))
     return "\n".join([head] + out)
 
 
@@ -838,10 +1020,37 @@ unknown, and an unflagged prompt with unknown positions is not clean. No flagged
 changes. Where the deployment rule cuts clean rows: {clean_cuts()}. Where it cuts every
 clean row at a layer, a template position there sits at the fp16 tolerance floor, and a
 deployment on that model cannot clear any prompt at that layer: it would have to drop
-the layer from the scan or raise its tolerance, and its false-positive rate would have
-to be measured after that change. This section reuses the calibrations as saved and is
+the layer from the scan or raise its tolerance. The next subsection raises it per layer
+and measures the result. This section reuses the calibrations as saved and is
 not an end-to-end deployment benchmark; truncating saved steps also says nothing about
 full-inversion runtime.
+
+### Under a per-layer deployment tolerance
+
+The tolerance at each layer is {tolerance_rule()} over that model's calibration
+bank. It is fitted on clean bank rows only: no attacked prompt, ladder prompt or gold token
+enters the choice. The inverter takes it with `--rel_tol_by_layer`
+(`scripts/deploy_tolerance.py`, `scripts/deploy_tolerance_report.py`).
+
+{tolerance_fit_table()}
+
+{tolerance_reread_line()} Cells the flat tolerance changed, under both rules:
+
+{tolerance_cells_table()}
+
+**Fresh deployment-mode runs.** Inversion re-run from the saved activations and stage-1
+deltas with `--stop_on miss` and the per-layer tolerance, no gold token, compared with the
+evaluator rows position by position (`scripts/deploy_compare.py`). Scope: {deploy_run_scope()}.
+
+{deploy_run_table()}
+
+{deploy_run_cells_table()}
+
+A miss at the last position is the attacked position crossing the tolerance; it ends a
+row that is already complete. Calibrations were not refitted, because the rows they are
+fitted on do not change.
+
+{tolerance_conclusion()}
 
 ## Paired transitions, Qwen-0.5B, n=50
 
@@ -981,7 +1190,11 @@ threshold, the single-layer rule of the section above. Driver: `scripts/read_lay
 {read_layer_reading()}
 
 **What the attacker buys by accepting detection.** The ceiling at the watched layer raised
-from that layer's threshold upward, Llama-3.2-1B at layer 16, budget 0.30, n=15:
+above that layer's threshold, Llama-3.2-1B at layer 16 (threshold 4.40), budget 0.30, n=15.
+Detection is the real detector on inverted rows, not the attacker's surrogate; the clean arm
+of the same prompts is 0 of 15 at that layer. gemma-3-1b at layer 26 (threshold 3.91) gives
+the same detection column, 15 of 15 at every ceiling above the threshold, with 0 judged gains
+until ceiling 20, where 3 of 15 appear:
 
 {read_layer_sweep_table()}
 

@@ -54,6 +54,29 @@ def judged(ladder_dir: Path, field: str, gate_field: str, gate_min: float) -> di
     return out
 
 
+def sweep_detection(tree: Path, calibration: Path, bank_layers: Path, read_layer: int) -> dict:
+    """Flagged counts for a sweep tree whose rows were inverted after the fact."""
+    cal = json.loads(resolve(calibration).read_text())
+    thr = thresholds(bank_layers, cal, lambda r: r)
+    prof: dict = collections.defaultdict(dict)
+    inj = None
+    for line in resolve(tree).read_text().splitlines():
+        if not line.strip():
+            continue
+        r = json.loads(line)
+        if r["arm"] in CLEAN_ARMS:
+            continue
+        inj = r["inj_layer"] if inj is None else inj
+        prof[r["prompt_index"]][r["layer"]] = detect.row_score(r, cal["k"], cal)
+    layers = [L for L in sorted(thr) if inj is not None and L >= inj]
+    n = len(prof)
+    return {"n": n, "read_layer": read_layer, "threshold": thr.get(read_layer),
+            "flagged_read": sum(1 for p in prof
+                                if prof[p].get(read_layer, float("-inf")) > thr[read_layer]),
+            "flagged_any": sum(1 for p in prof
+                               if any(prof[p].get(L, float("-inf")) > thr[L] for L in layers))}
+
+
 def attack_only(ladder_dir: Path) -> list[dict]:
     """Stage-1 rows of a tree with no inversion: ceiling sweeps and no-sculpting controls."""
     out = []

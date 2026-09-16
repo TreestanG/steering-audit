@@ -369,9 +369,9 @@
   ],
   "provenance": {
    "code": {
-    "git_head": "6d05757e684596a42558f56d0de1cc0925065a42",
+    "git_head": "f327b5b23281097e1cb856b10913574e64292b2b",
     "git_dirty": true,
-    "source_sha256": "ce714b3aaab2780d1592748420af19145665f5ff652117637aca8ef3b4813026"
+    "source_sha256": "6efddf690d26fc3d2d31aaa553e8c32b42b9612ec014d21850ad2128a59994eb"
    },
    "inputs": {
     "rows": {
@@ -763,9 +763,9 @@
   ],
   "provenance": {
    "code": {
-    "git_head": "6d05757e684596a42558f56d0de1cc0925065a42",
+    "git_head": "f327b5b23281097e1cb856b10913574e64292b2b",
     "git_dirty": true,
-    "source_sha256": "ce714b3aaab2780d1592748420af19145665f5ff652117637aca8ef3b4813026"
+    "source_sha256": "6efddf690d26fc3d2d31aaa553e8c32b42b9612ec014d21850ad2128a59994eb"
    },
    "inputs": {
     "rows": {
@@ -1030,9 +1030,9 @@
   ],
   "provenance": {
    "code": {
-    "git_head": "6d05757e684596a42558f56d0de1cc0925065a42",
+    "git_head": "f327b5b23281097e1cb856b10913574e64292b2b",
     "git_dirty": true,
-    "source_sha256": "ce714b3aaab2780d1592748420af19145665f5ff652117637aca8ef3b4813026"
+    "source_sha256": "6efddf690d26fc3d2d31aaa553e8c32b42b9612ec014d21850ad2128a59994eb"
    },
    "inputs": {
     "rows": {
@@ -1284,9 +1284,9 @@
   ],
   "provenance": {
    "code": {
-    "git_head": "6d05757e684596a42558f56d0de1cc0925065a42",
+    "git_head": "f327b5b23281097e1cb856b10913574e64292b2b",
     "git_dirty": true,
-    "source_sha256": "ce714b3aaab2780d1592748420af19145665f5ff652117637aca8ef3b4813026"
+    "source_sha256": "6efddf690d26fc3d2d31aaa553e8c32b42b9612ec014d21850ad2128a59994eb"
    },
    "inputs": {
     "rows": {
@@ -1538,9 +1538,9 @@
   ],
   "provenance": {
    "code": {
-    "git_head": "6d05757e684596a42558f56d0de1cc0925065a42",
+    "git_head": "f327b5b23281097e1cb856b10913574e64292b2b",
     "git_dirty": true,
-    "source_sha256": "ce714b3aaab2780d1592748420af19145665f5ff652117637aca8ef3b4813026"
+    "source_sha256": "6efddf690d26fc3d2d31aaa553e8c32b42b9612ec014d21850ad2128a59994eb"
    },
    "inputs": {
     "rows": {
@@ -2013,9 +2013,9 @@
   ],
   "provenance": {
    "code": {
-    "git_head": "6d05757e684596a42558f56d0de1cc0925065a42",
+    "git_head": "f327b5b23281097e1cb856b10913574e64292b2b",
     "git_dirty": true,
-    "source_sha256": "ce714b3aaab2780d1592748420af19145665f5ff652117637aca8ef3b4813026"
+    "source_sha256": "6efddf690d26fc3d2d31aaa553e8c32b42b9612ec014d21850ad2128a59994eb"
    },
    "inputs": {
     "rows": {
@@ -2488,9 +2488,9 @@
   ],
   "provenance": {
    "code": {
-    "git_head": "6d05757e684596a42558f56d0de1cc0925065a42",
+    "git_head": "f327b5b23281097e1cb856b10913574e64292b2b",
     "git_dirty": true,
-    "source_sha256": "ce714b3aaab2780d1592748420af19145665f5ff652117637aca8ef3b4813026"
+    "source_sha256": "6efddf690d26fc3d2d31aaa553e8c32b42b9612ec014d21850ad2128a59994eb"
    },
    "inputs": {
     "rows": {
@@ -2806,9 +2806,9 @@
   ],
   "provenance": {
    "code": {
-    "git_head": "6d05757e684596a42558f56d0de1cc0925065a42",
+    "git_head": "f327b5b23281097e1cb856b10913574e64292b2b",
     "git_dirty": true,
-    "source_sha256": "ce714b3aaab2780d1592748420af19145665f5ff652117637aca8ef3b4813026"
+    "source_sha256": "6efddf690d26fc3d2d31aaa553e8c32b42b9612ec014d21850ad2128a59994eb"
    },
    "inputs": {
     "rows": {
@@ -3094,9 +3094,9 @@
   ],
   "provenance": {
    "code": {
-    "git_head": "6d05757e684596a42558f56d0de1cc0925065a42",
+    "git_head": "f327b5b23281097e1cb856b10913574e64292b2b",
     "git_dirty": true,
-    "source_sha256": "ce714b3aaab2780d1592748420af19145665f5ff652117637aca8ef3b4813026"
+    "source_sha256": "6efddf690d26fc3d2d31aaa553e8c32b42b9612ec014d21850ad2128a59994eb"
    },
    "inputs": {
     "rows": {
@@ -3382,9 +3382,9 @@
   ],
   "provenance": {
    "code": {
-    "git_head": "6d05757e684596a42558f56d0de1cc0925065a42",
+    "git_head": "f327b5b23281097e1cb856b10913574e64292b2b",
     "git_dirty": true,
-    "source_sha256": "ce714b3aaab2780d1592748420af19145665f5ff652117637aca8ef3b4813026"
+    "source_sha256": "6efddf690d26fc3d2d31aaa553e8c32b42b9612ec014d21850ad2128a59994eb"
    },
    "inputs": {
     "rows": {
@@ -3690,5 +3690,85 @@
     "judged_gains": null
    }
   ]
+ },
+ {
+  "sweep_detection": {
+   "n": 15,
+   "read_layer": 16,
+   "threshold": 4.398472972616022,
+   "flagged_read": 15,
+   "flagged_any": 15,
+   "tree": "results_cuda/meta-llama_Llama-3.2-1B-Instruct_sweepz6/pgd_sipit/pgd_rows.jsonl"
+  }
+ },
+ {
+  "sweep_detection": {
+   "n": 15,
+   "read_layer": 16,
+   "threshold": 4.398472972616022,
+   "flagged_read": 15,
+   "flagged_any": 15,
+   "tree": "results_cuda/meta-llama_Llama-3.2-1B-Instruct_sweepz8/pgd_sipit/pgd_rows.jsonl"
+  }
+ },
+ {
+  "sweep_detection": {
+   "n": 15,
+   "read_layer": 16,
+   "threshold": 4.398472972616022,
+   "flagged_read": 15,
+   "flagged_any": 15,
+   "tree": "results_cuda/meta-llama_Llama-3.2-1B-Instruct_sweepz12/pgd_sipit/pgd_rows.jsonl"
+  }
+ },
+ {
+  "sweep_detection": {
+   "n": 15,
+   "read_layer": 16,
+   "threshold": 4.398472972616022,
+   "flagged_read": 15,
+   "flagged_any": 15,
+   "tree": "results_cuda/meta-llama_Llama-3.2-1B-Instruct_sweepz20/pgd_sipit/pgd_rows.jsonl"
+  }
+ },
+ {
+  "sweep_detection": {
+   "n": 15,
+   "read_layer": 26,
+   "threshold": 3.9115384120632437,
+   "flagged_read": 15,
+   "flagged_any": 15,
+   "tree": "results_cuda/google_gemma-3-1b-it_sweepz6/pgd_sipit/pgd_rows.jsonl"
+  }
+ },
+ {
+  "sweep_detection": {
+   "n": 15,
+   "read_layer": 26,
+   "threshold": 3.9115384120632437,
+   "flagged_read": 15,
+   "flagged_any": 15,
+   "tree": "results_cuda/google_gemma-3-1b-it_sweepz8/pgd_sipit/pgd_rows.jsonl"
+  }
+ },
+ {
+  "sweep_detection": {
+   "n": 15,
+   "read_layer": 26,
+   "threshold": 3.9115384120632437,
+   "flagged_read": 15,
+   "flagged_any": 15,
+   "tree": "results_cuda/google_gemma-3-1b-it_sweepz12/pgd_sipit/pgd_rows.jsonl"
+  }
+ },
+ {
+  "sweep_detection": {
+   "n": 15,
+   "read_layer": 26,
+   "threshold": 3.9115384120632437,
+   "flagged_read": 15,
+   "flagged_any": 15,
+   "tree": "results_cuda/google_gemma-3-1b-it_sweepz20/pgd_sipit/pgd_rows.jsonl"
+  }
  }
 ]
