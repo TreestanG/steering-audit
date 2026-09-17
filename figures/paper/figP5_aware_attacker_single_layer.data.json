@@ -1,0 +1,66 @@
+[
+  {
+    "ceiling": 6.0,
+    "n": 15,
+    "flagged_read": 15,
+    "worst_other_layer": 15,
+    "flagged_other": 15,
+    "per_layer": {
+      "11": 0,
+      "12": 2,
+      "13": 4,
+      "14": 15,
+      "15": 15,
+      "16": 15
+    },
+    "source": "results_cuda/meta-llama_Llama-3.2-1B-Instruct_sweepz6/pgd_sipit/pgd_rows.jsonl"
+  },
+  {
+    "ceiling": 8.0,
+    "n": 15,
+    "flagged_read": 15,
+    "worst_other_layer": 15,
+    "flagged_other": 15,
+    "per_layer": {
+      "11": 2,
+      "12": 7,
+      "13": 14,
+      "14": 15,
+      "15": 15,
+      "16": 15
+    },
+    "source": "results_cuda/meta-llama_Llama-3.2-1B-Instruct_sweepz8/pgd_sipit/pgd_rows.jsonl"
+  },
+  {
+    "ceiling": 12.0,
+    "n": 15,
+    "flagged_read": 15,
+    "worst_other_layer": 15,
+    "flagged_other": 15,
+    "per_layer": {
+      "11": 15,
+      "12": 15,
+      "13": 15,
+      "14": 15,
+      "15": 15,
+      "16": 15
+    },
+    "source": "results_cuda/meta-llama_Llama-3.2-1B-Instruct_sweepz12/pgd_sipit/pgd_rows.jsonl"
+  },
+  {
+    "ceiling": 20.0,
+    "n": 15,
+    "flagged_read": 15,
+    "worst_other_layer": 15,
+    "flagged_other": 15,
+    "per_layer": {
+      "11": 15,
+      "12": 15,
+      "13": 15,
+      "14": 15,
+      "15": 15,
+      "16": 15
+    },
+    "source": "results_cuda/meta-llama_Llama-3.2-1B-Instruct_sweepz20/pgd_sipit/pgd_rows.jsonl"
+  }
+]

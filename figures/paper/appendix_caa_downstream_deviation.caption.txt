@@ -1,0 +1,1 @@
+CAA on the same sentiment prompts and budget, with the same axes and constraints as the PGD comparison. Final-layer deviation is lower than at injection on GPT-2 and all four Qwen models; Gemma amplifies it. These trajectories do not establish a CAA jailbreak threshold.
