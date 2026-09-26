@@ -14,7 +14,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import scienceplots  # noqa: F401
 from matplotlib.lines import Line2D
-from matplotlib.patches import Patch, Rectangle
+from matplotlib.patches import Rectangle
 from scipy.stats import norm
 
 import ladders
@@ -45,7 +45,6 @@ MODEL_COLORS = {"Qwen-0.5B": PAL[0], "Qwen-1.5B": PAL[1], "Qwen-7B": PAL[2], "Ge
 ATTACK = "#a34d1c"
 REL_TOL16 = 1e-2
 TEXT_W = 5.5  # ICLR \textwidth in inches; figures are drawn at print size so fonts print at their nominal points
-TWO_COL = TEXT_W
 
 
 def rows(path):
@@ -73,8 +72,8 @@ def _cells(path, **match):
 def _readouts_on(ax, legend_below=True):
     cfg = [("gpt2_fp16", "GPT-2, layer 8, single attacked position", 8,
             ["tpr_summary.json", "tpr_summary_k1.json", "tpr_summary_rolezlog_k1_fpr5.json"])]
-    stats = [("shipped: top-5 mean, raw", "-"), ("top-1, raw", "--"), ("top-1, log + end roles", ":")]
-    arms = [(("pgd", "sentiment"), "o", "PGD (sentiment objective)"), (("pgd", "cw"), "^", "PGD (CW objective)"),
+    stats = [("top-5 mean, raw", "-"), ("top-1, raw", "--"), ("top-1, log + template roles", ":")]
+    arms = [(("pgd", "sentiment"), "o", "PGD (sentiment objective)"), (("pgd", "cw"), "^", "PGD (margin objective)"),
             (("random", "-"), "s", "norm-matched random")]
     axes = [ax]
     for ax, (slug, title, L, files) in zip(axes, cfg):
@@ -98,53 +97,9 @@ def _readouts_on(ax, legend_below=True):
     h = [Line2D([], [], color=c, ls=ls, label=n) for (n, ls), c in zip(stats, PAL)]
     h += [Line2D([], [], color="k", marker=mk, ls="", mfc="k" if arm[0] == "pgd" else "none", label=n) for arm, mk, n in arms]
     if legend_below:
-        axes[0].legend(handles=h, loc="upper center", bbox_to_anchor=(0.5, -0.50), ncol=2, fontsize=5, frameon=False, columnspacing=0.8)
+        axes[0].legend(handles=h, loc="upper center", bbox_to_anchor=(0.5, -0.42), ncol=2, fontsize=5, frameon=False, columnspacing=0.8)
     else:
         axes[0].legend(handles=h, loc="lower right", fontsize=5, frameon=True)
-
-
-def _ladder_n50_on(axes, single_layer=False):
-    d = json.load(open(R / "Qwen_Qwen2.5-0.5B-Instruct_n50/pgd_sipit/detection_vs_efficacy.json"))
-    cells = {(c["arm"], c["fraction"]): c for c in d["cells"]}
-    bud = sorted({c["fraction"] for c in d["cells"]})
-    gen = json.load(open(R / "Qwen_Qwen2.5-0.5B-Instruct_n50/pgd/ladder/jbb_refusal_harmful_b0.30_gen.json"))
-    base_hb = gen["judge_asr"]["harmbench"]["none"]
-    tcells, cal = _cells(R / "Qwen_Qwen2.5-0.5B-Instruct_n50/pgd_sipit/tpr_summary_rolezlog_k1_fpr5_n100.json",
-                         behavior="jbb_refusal")
-    tc = {(c["arm"], c["budget"]): c for c in tcells}
-    ax = axes[0]
-    ax.plot(bud, [cells[("pgd", b)]["asr"] for b in bud], "-o", color=PAL[0], label="HarmBench ASR, PGD")
-    ax.plot(bud, [cells[("random", b)]["asr"] for b in bud], "-s", color="0.5", mfc="none", label="HarmBench ASR, random")
-    ax.plot(bud, [cells[("pgd", b)]["asr_substring"] for b in bud], ":", marker="o", mfc="none", color=PAL[0],
-            label="substring ASR, PGD (noisy proxy)")
-    ax.plot(bud, [cells[("pgd", b)]["judge_strongreject_score_mean"] for b in bud], "-.^", color=PAL[2],
-            label="StrongREJECT score, PGD")
-    ax.axhline(base_hb, color="k", lw=0.6, ls="--")
-    ax.text(bud[0], base_hb + 0.02, "unsteered baseline", fontsize=5.5)
-    ax.set_ylabel("rate / score"); ax.set_title("attack efficacy (n = 50 prompts)")
-    ax.legend(loc="upper left", fontsize=5.5)
-    ax = axes[1]
-    if not single_layer:
-        ax.plot(bud, [cells[("pgd", b)]["detection_rate"] for b in bud], "-o", color=PAL[0], label="detected, PGD")
-        ax.plot(bud, [cells[("random", b)]["detection_rate"] for b in bud], "--s", color="0.5", mfc="none", label="detected, random")
-        ax.plot(bud, [tc[("clean", 0.0)]["tpr_shipped"]] * len(bud), ":", color="k", label="flagged, paired clean control")
-    if single_layer:
-        e = {x["model"]: x for x in _sl()}["Qwen-0.5B (n=50)"]
-        sc, last, inj = _sl_cells(e), e["layers"][-1], e["inj_layer"]
-        ax.plot(bud, [_sl_rate(sc[("pgd", _sl_budget(sc, b))], last) for b in bud], "--D", color=PAL[3],
-                mfc="none", label=f"detected, PGD: last layer (L{last}) alone")
-        ax.plot(bud, [_sl_rate(sc[("pgd", _sl_budget(sc, b))], inj) for b in bud], "--v", color=PAL[4],
-                mfc="none", label=f"detected, PGD: injection layer (L{inj}) alone")
-        ax.plot(bud, [_sl_rate(sc[("clean", 0.0)], last)] * len(bud), ":", color=PAL[3], lw=0.8,
-                label="flagged, clean control, last layer alone")
-    ax.set_ylabel("detection rate"); ax.set_ylim(-0.03, 1.05)
-    ax.set_title("single-layer detection" if single_layer else
-                 r"detector: top-1 log-$z$, $\sigma$ = %.2f, run $\geq$ 3" % cal["sigma"])
-    ax.legend(loc="center right", fontsize=5.5)
-    for ax in axes:
-        ax.set_xscale("log"); ax.set_xlabel("PGD budget (relative)")
-        ax.axvline(REL_TOL16, color="k", ls=":", lw=0.8)
-    axes[1].text(REL_TOL16 * 1.05, 0.45, "fp16 tolerance", fontsize=5.5, rotation=90, va="center")
 
 
 def _tail_on(ax):
@@ -199,7 +154,6 @@ def _sl_rate(c, L):
 
 CUR = Path("results/current")
 MAHA = CUR / "mahalanobis-qwen05b-2026-09-08.json"
-AWARE_SL = CUR / "aware-single-layer-2026-09-09.json"
 TRANS = CUR / "n50-transitions-2026-09-08.json"
 BASELINES = {label: lad.baselines for label, lad in ladders.LADDERS.items()}
 HOLDOUT = [
@@ -218,12 +172,6 @@ BUD = [0.0085, 0.02, 0.05, 0.12, 0.3]
 EXCLUDED_GAINS = {("Qwen-0.5B (n=50)", 0.0085): 1, ("Qwen-0.5B (n=50)", 0.02): 1}
 XT = ["clean"] + [f"{b:g}" for b in BUD]
 XS = np.arange(len(XT))
-QCOL = MCOL["Qwen_Qwen2.5-0.5B-Instruct_fp16"]
-GREY = "0.45"
-
-
-def takeaway(fig, text, y=1.0):
-    fig.suptitle(text, fontsize=8, y=y, fontweight="bold")
 
 
 def base_rates(label):
@@ -357,54 +305,6 @@ def fig_paper4_detection_vs_jailbreak():
     save(fig, "figP4_detection_vs_jailbreak")
 
 
-# ------------------------------------------------------------ figP2: roles are positions, not words
-ROLE_PROMPTS = ["Can my dog eat cat food?", "Can my cat eat dog food, and is it safe long term?"]
-ROLE_EDGES = {"content_first", "content_second", "content_last"}
-ROLE_BANDS = [("pre", "template prefix: one role per position, indexed from the start", PAL[6]),
-              ("edge", "user-turn edges: content_first, content_second, content_last", PAL[1]),
-              ("content", "interior content: one shared role", PAL[0]),
-              ("suf", "template suffix: one role per position, indexed from the end", PAL[2])]
-
-
-def _role_band(role):
-    if role.startswith("pre"):
-        return "pre"
-    if role.startswith("suf"):
-        return "suf"
-    return "edge" if role in ROLE_EDGES else "content"
-
-
-def fig_appendix_template_roles():
-    import detect
-    from transformers import AutoTokenizer
-    tk = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct", local_files_only=True)
-    chat_ids, header_len = detect.chat_template_spec(tk)
-    band_col = {k: c for k, _, c in ROLE_BANDS}
-    fig, axes = plt.subplots(len(ROLE_PROMPTS), 1, figsize=(TEXT_W, 3.3))
-    for ax, msg, tag in zip(axes, ROLE_PROMPTS, "ab"):
-        text = tk.apply_chat_template([{"role": "user", "content": msg}], tokenize=False, add_generation_prompt=True)
-        ids = tk(text)["input_ids"]
-        roles = detect.position_roles(ids, chat_ids, "pooled", 6, header_len)
-        for i, (t, r) in enumerate(zip(ids, roles)):
-            col = band_col[_role_band(r)]
-            ax.add_patch(Rectangle((i + 0.08, 0), 0.84, 1, facecolor=col, alpha=0.35, edgecolor=col, lw=0.6))
-            ax.text(i + 0.5, 0.5, str(i), ha="center", va="center", fontsize=3.8)
-            tok = tk.decode([t]).replace("\n", "\\n")
-            ax.text(i + 0.5, -0.15, tok, rotation=90, ha="center", va="top", fontsize=4.6, family="monospace",
-                    fontweight="bold" if tok.strip() in ("dog", "cat") else "normal")
-            ax.text(i + 0.5, 1.15, r, rotation=90, ha="center", va="bottom", fontsize=4.2, family="monospace")
-        ax.set_xlim(0, len(ids)); ax.set_ylim(-2.3, 3.5); ax.axis("off")
-        ax.set_title(f"({tag}) user message {msg!r}: {len(ids)} tokens after Qwen's chat template, role above, token below",
-                     fontsize=7.5, loc="left")
-    fig.legend(handles=[Patch(facecolor=c, alpha=0.35, edgecolor=c, label=lab) for _, lab, c in ROLE_BANDS],
-               loc="lower center", ncol=2, fontsize=6, frameon=False)
-    fig.tight_layout(rect=(0, 0.08, 1, 0.92))
-    takeaway(fig, "Roles are positions, not words: every template token has its own role, the interior of the user turn shares one, the suffix is\n"
-                  "indexed from the end. 'dog' and 'cat' are z-scored against the same clean (layer, role) cell wherever they sit in the interior.",
-             y=0.995)
-    save(fig, "appendix_template_roles")
-
-
 # ------------------------------------------------------------ figP3: the ladder of auditors on one model
 def fig_paper3_ladder_of_auditors_qwen05b():
     bc, base = base_rates("Qwen-0.5B (n=50)")
@@ -441,78 +341,6 @@ def fig_paper3_ladder_of_auditors_qwen05b():
     save(fig, "figP3_ladder_of_auditors_qwen05b")
 
 
-# ------------------------------------------------------------ figP4: where the attack works it is caught
-def fig_appendix_jailbreak_gains():
-    """Induced jailbreak observations, grouped by budget and stacked by detection."""
-    configs = [
-        ("Qwen-0.5B", "Qwen-0.5B (n=50)", TRANS),
-        ("Qwen-1.5B", "Qwen-1.5B", RC / "Qwen_Qwen2.5-1.5B-Instruct_fp16/pgd_sipit/detection_vs_efficacy.json"),
-        ("Qwen-7B", "Qwen-7B", RC / "Qwen_Qwen2.5-7B-Instruct_fp16/pgd_sipit/detection_vs_efficacy.json"),
-    ]
-    single = {e["model"]: e for e in _sl()}
-    counts = []
-    for name, key, path in configs:
-        transitions = json.loads(path.read_text())
-        cells = {c["fraction"]: c for c in transitions["cells"] if c["arm"] == "pgd"}
-        e = single[key]
-        layer_cells = _sl_cells(e)
-        detected, undetected = [], []
-        for budget in BUD:
-            c = cells[budget]
-            result = layer_cells[("pgd", _sl_budget(layer_cells, budget))]["per_layer"][str(e["layers"][-1])]["single"]
-            # Complete detection of the attack cell establishes detection of every gain.
-            # Partial detection would require a per-prompt join; never substitute the
-            # legacy multi-layer gains_undetected field for the single-layer result.
-            if c["gains"] and (result["flagged"] != result["n"] or result.get("unscorable", 0)):
-                raise ValueError(f"{name}, {budget}: join individual gains to final-layer verdicts before plotting")
-            assert result["n"] == c["n"]
-            detected.append(c["gains"] - EXCLUDED_GAINS.get((key, budget), 0))
-            undetected.append(0)
-        excluded = sum(v for (k, _), v in EXCLUDED_GAINS.items() if k == key)
-        assert sum(detected) + excluded == transitions["pooled_pgd_gains"]["gains_rows"]
-        sample_sizes = {c["n"] for c in cells.values()}
-        assert len(sample_sizes) == 1, f"{name}: sample size varies across budgets"
-        legend_name = f"{name} (n = {sample_sizes.pop()})"
-        counts.append((legend_name, np.array(detected), np.array(undetected)))
-
-    fig, ax = plt.subplots(figsize=(TEXT_W, 3.0))
-    fig.subplots_adjust(left=0.10, right=0.98, bottom=0.19, top=0.71)
-    xs, width = np.arange(len(BUD)), 0.23
-    colors = ["#2166ac", "#5b9ac4", "#a6cbe3"]
-    for i, ((name, detected, undetected), color) in enumerate(zip(counts, colors)):
-        positions = xs + (i - 1) * width
-        ax.bar(positions, detected, width=width * 0.90, color=color, edgecolor="white", linewidth=0.5, label=name, zorder=3)
-        ax.bar(positions, undetected, bottom=detected, width=width * 0.90,
-               color="#c43c39", edgecolor="white", linewidth=0.5, zorder=3)
-        for x, total in zip(positions, detected + undetected):
-            ax.text(x, total + 0.35, str(int(total)), ha="center", va="bottom", fontsize=7,
-                    color="#203040" if total else "0.55")
-    total = sum(int(d.sum() + u.sum()) for _, d, u in counts)
-    missed = sum(int(u.sum()) for _, _, u in counts)
-    handles, labels = ax.get_legend_handles_labels()
-    handles.append(Patch(facecolor="#c43c39", label="Undetected (none)"))
-    labels.append("Undetected (none)")
-    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.54, 0.80),
-               ncol=4, frameon=False, fontsize=7)
-    ax.set_xticks(xs, [f"{b:g}" for b in BUD])
-    ax.set_xlabel("Relative perturbation budget", labelpad=6)
-    ax.set_ylabel("Induced jailbreak observations", labelpad=6)
-    ax.set_yticks([0, 5, 10, 15, 20, 25])
-    ax.set_ylim(0, 28)
-    ax.set_xlim(-0.6, len(BUD) - 0.4)
-    ax.minorticks_off()
-    ax.tick_params(top=False, right=False, labelsize=7, length=3)
-    ax.spines[["top", "right"]].set_visible(False)
-    ax.grid(axis="y", color="0.9", linewidth=0.6, zorder=0)
-    fig.suptitle("All observed attack-induced jailbreaks are detected from the final layer",
-                 fontsize=9, fontweight="bold", y=0.98)
-    fig.text(0.54, 0.875, f"{total} induced jailbreak observations  ·  {missed} undetected",
-             ha="center", fontsize=9, color="#2166ac")
-    fig.text(0.54, 0.04, "PGD attacks · Paired HarmBench labels · Evaluator stopping rule",
-             ha="center", fontsize=6.5, color="0.4")
-    save(fig, "appendix_jailbreak_gains")
-
-
 # ------------------------------------------------------------ figP5: the detector-aware attacker, single-layer read
 def fig_paper5_aware_attacker_single_layer():
     # Use the same 15-prompt cohort throughout; do not mix in the n=50 extension.
@@ -534,7 +362,7 @@ def fig_paper5_aware_attacker_single_layer():
     import detect
     audits = [e["sweep_detection"] for e in data if "sweep_detection" in e]
     cal = json.loads(Path(constrained["provenance"]["inputs"]["calibration"]["path"]).read_text())
-    sweep_read, sweep_other, audit_counts = [], [], []
+    sweep_read, sweep_other = [], []
     for cell in sweep:
         suffix = f'_sweepz{cell["ceiling"]:g}/pgd_sipit/pgd_rows.jsonl'
         audit = next(a for a in audits if "meta-llama_Llama-3.2-1B-Instruct" in a["tree"]
@@ -555,11 +383,6 @@ def fig_paper5_aware_attacker_single_layer():
         other = max((count, layer) for layer, count in per_layer.items() if layer != 16)
         sweep_read.append(audit["flagged_read"] / audit["n"])
         sweep_other.append(other[0] / audit["n"])
-        audit_counts.append({"ceiling": cell["ceiling"], "n": audit["n"],
-                             "flagged_read": audit["flagged_read"],
-                             "worst_other_layer": other[1], "flagged_other": other[0],
-                             "per_layer": per_layer, "source": audit["tree"]})
-    (OUT / "figP5_aware_attacker_single_layer.data.json").write_text(json.dumps(audit_counts, indent=2) + "\n")
     watched = [base["flagged_read"]["16"] / 15] + sweep_read + [uncapped["flagged_read"]["16"] / 15]
     def worst(c):
         return max(v["flagged"] for layer, v in c["per_layer"].items() if layer != "16") / 15
@@ -594,43 +417,6 @@ def fig_paper5_aware_attacker_single_layer():
         ax.set_xlim(-0.6, len(xs) - 0.4)
     fig.tight_layout()
     save(fig, "figP5_aware_attacker_single_layer")
-
-
-def fig_appendix_budget_number_line():
-    aware = json.loads((CUR / "read-layer-2026-09-15.json").read_text())
-    cells = [c for e in aware if "read" in e.get("model", "")
-             for c in e["cells"] if c["arm"] == "pgd"]
-    realized = max(c["dev_injection_median"] for c in cells)
-    transitions = json.loads(TRANS.read_text())["cells"]
-    unadjusted = min(c["fraction"] for c in transitions if c["arm"] == "pgd" and c["mcnemar_p"] < .05)
-    holm = min(c["fraction"] for c in transitions if c["arm"] == "pgd" and c["mcnemar_p_holm"] < .05)
-    assert (unadjusted, holm) == (0.12, 0.3)
-    fig, ax = plt.subplots(figsize=(TEXT_W, 1.2))
-    fig.subplots_adjust(left=.025, right=.97, bottom=.38, top=.75)
-    ax.set_xscale("log"); ax.set_xlim(.001, .5); ax.set_ylim(0, 1)
-    ax.axvspan(.001, realized, color="#e1ece8")
-    ax.axvspan(.12, .3, color="#dce9f5")
-    ax.hlines(.5, .001, .5, color="0.4", lw=1)
-    entries = [
-        (realized, "Aware: ≤0.0016\n(cell medians)", .0021, 1.3, "#39745b"),
-        (.0085, "All flagged: 3 models\n0.0085", .0055, -.40, "#226699"),
-        (.01, "fp16 tolerance\n0.01", .009, 1.3, "0.4"),
-        (.02, "All flagged: 5 models\n0.02", .029, -.40, "#226699"),
-        (.12, "Rate first rises: 0.12\nunadjusted", .105, 1.3, "#954527"),
-        (.3, "0.3\nHolm", .32, 1.3, "#954527")]
-    for x, label, tx, ty, color in entries:
-        ax.plot(x, .5, "o", color=color, ms=4)
-        ax.annotate(label, (x, .5), xytext=(tx, ty), textcoords="data", ha="center", va="center",
-                    fontsize=6.2, color=color, arrowprops=dict(arrowstyle="-", color=color, lw=.6))
-    ax.text(.0025, .62, "0 induced jailbreaks\n(aware attacks)", fontsize=5.8, ha="center")
-    ax.text(.18, .08, "Rate rises; gains flagged", fontsize=5.8, ha="center")
-    ax.set_xticks([.001, .5], labels=["0.001", "0.5"])
-    ax.tick_params(axis="x", which="both", length=0, labelsize=6)
-    ax.set_yticks([])
-    for spine in ax.spines.values(): spine.set_visible(False)
-    fig.text(.5, .015, "Relative scale (log) · 0 observed undetected induced jailbreaks · shading summarizes tested conditions only",
-             ha="center", fontsize=6)
-    save(fig, "appendix_budget_number_line")
 
 
 def fig_paper1_observation_ladder():
@@ -681,7 +467,7 @@ def fig_appendix_calibration():
     _tail_on(axes[0])
     axes[0].set_ylabel(r"$P(z > \sigma)$, clean")
     axes[0].set_title("(a) clean-statistic tail, six models", fontsize=6.5)
-    axes[0].text(3.55, 0.15, r"at $3\sigma$: 1%, not 0.135%", fontsize=5.5)
+    axes[0].text(3.15, 0.12, "at $3\\sigma$: 1.2–1.8%\nnot 0.135%", fontsize=5.5)
     _readouts_on(axes[1], legend_below=True)
     axes[1].set_title("(b) GPT-2 layer 8: three read-outs", fontsize=6.5)
     axes[1].set_xticks([0.002, 0.0043, 0.0085, 0.017]); axes[1].set_xticklabels(["0.002", "0.0043", "0.0085", "0.017"], rotation=40)
@@ -700,13 +486,11 @@ def fig_appendix_calibration():
         pts.sort()
         ax.errorbar([x for x, *_ in pts], [m for _, m, *_ in pts], yerr=[s for _, _, s, _ in pts], fmt="-o", ms=3.2,
                     color=pts[0][3], capsize=2, lw=1.0, label=name)
-    ax.axhline(0.05, color="k", ls="--", lw=0.8); ax.text(48, 0.028, "nominal 5% (in-sample)", fontsize=5)
-    ax.set_xticks([25, 50, 75, 100]); ax.set_xlabel("clean prompts in the calibration bank")
+    ax.axhline(0.05, color="k", ls="--", lw=0.8); ax.text(104, 0.03, "nominal 5%", fontsize=5, ha="right")
+    ax.set_xticks([25, 50, 75, 100]); ax.set_xlabel("calibration-bank prompts")
     ax.set_ylabel("held-out FPR")
     ax.set_ylim(0, 0.27); ax.legend(loc="upper right", fontsize=4.8, frameon=False, handlelength=1.2)
     ax.set_title("(c) the nominal 5% is in-sample", fontsize=6.5)
-    takeaway(fig, "Calibration decides whether the detector works: heavy tails, the read-out, and the held-out false-positive rate.",
-             y=0.995)
     save(fig, "appendix_calibration")
 
 
@@ -719,7 +503,6 @@ def _steering_depth_figure(arm):
              ("Qwen_Qwen2.5-7B-Instruct", "Qwen-7B"),
              ("google_gemma-3-1b-it", "Gemma-1B")]
     fig, axes = plt.subplots(1, 2, figsize=(7, 1.95), sharey=True)
-    exported = []
     for idx, (slug, label) in enumerate(specs):
         source = Path("results") / (slug + "_fp32") / "pgd/pgd_sentiment_b0.0085.jsonl"
         data = rows(source)
@@ -733,10 +516,6 @@ def _steering_depth_figure(arm):
             median = np.median(values, axis=0)
             ax.plot(np.array(layers) - layers[0], median / .0085, color=PAL[idx],
                     marker=["o", "s", "^", "D", "v", "P"][idx], ms=2.6, lw=1, label=label)
-            exported.append({"model": label, "arm": arm, "constraint": scope, "n": 25,
-                             "layers": layers, "median_relative_deviation": median.tolist(),
-                             "median_prompt_peak_amplification": float(np.median(values.max(axis=1) / values[:, 0])),
-                             "source": str(source)})
     for ax, title in zip(axes, ["(a) Budget capped at injection only", "(b) Budget capped at every layer"]):
         ax.axhline(1, ls=":", color="0.35", lw=.8)
         ax.set_yscale("log"); ax.set_ylim(.06, 16)
@@ -754,16 +533,11 @@ def _steering_depth_figure(arm):
              if arm == "pgd" else "CAA attenuates on GPT-2 and Qwen, but amplifies on Gemma")
     fig.suptitle(title, fontsize=9, fontweight="bold", y=.99)
     stem = "appendix_" + arm + "_downstream_deviation"
-    (OUT / (stem + ".data.json")).write_text(json.dumps(exported, indent=2) + "\n")
     save(fig, stem)
 
 
 def fig_appendix_pgd_downstream_deviation():
     _steering_depth_figure("pgd")
-
-
-def fig_appendix_caa_downstream_deviation():
-    _steering_depth_figure("caa")
 
 
 if __name__ == "__main__":
